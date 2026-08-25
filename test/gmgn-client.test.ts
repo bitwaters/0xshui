@@ -151,7 +151,7 @@ test("429 fails without retry and prefers valid header reset metadata", async ()
     gmgn.fetchRank("1m"),
     (error: unknown) => {
       assert.ok(error instanceof GmgnRateLimitError);
-      assert.equal(error.cooldownUntil, NOW + 120_000);
+      assert.equal(error.cooldownUntil, NOW + 121_000);
       assert.equal(error.source, "header");
       return true;
     },
@@ -172,7 +172,7 @@ test("429 fails without retry and prefers valid header reset metadata", async ()
   await assert.rejects(
     oversized.fetchRank("1m"),
     (error: unknown) =>
-      error instanceof GmgnRateLimitError && error.cooldownUntil === NOW + 90_000,
+      error instanceof GmgnRateLimitError && error.cooldownUntil === NOW + 91_000,
   );
 });
 
@@ -188,7 +188,7 @@ test("recognizes nested rate limits and uses the safe fallback for non-JSON 429"
     (error: unknown) =>
       error instanceof GmgnRateLimitError &&
       error.source === "body" &&
-      error.cooldownUntil === NOW + 60_000,
+      error.cooldownUntil === NOW + 61_000,
   );
 
   const fallback = client(async () => new Response("busy", { status: 429 }));

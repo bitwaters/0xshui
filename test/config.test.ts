@@ -17,6 +17,7 @@ test("loads and normalizes the documented default configuration", () => {
   assert.equal(config.poll_interval, 1_000);
   assert.equal(config.gmgn.request_timeout, 5_000);
   assert.equal(config.gmgn.max_response_size, 10 * 1_024 * 1_024);
+  assert.equal(config.gmgn.local_weight_limit_per_second, 5);
   assert.equal(config.noise.creator_cooldown, 30 * 60_000);
   assert.deepEqual(config.outcomes.checkpoints, [15 * 60_000, 60 * 60_000]);
   assert.ok(Object.isFrozen(config));

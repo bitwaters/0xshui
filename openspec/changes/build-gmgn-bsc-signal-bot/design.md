@@ -44,9 +44,9 @@ Client 暴露五个用例方法：Trenches、Rank、Security、Kline、Pool。�
 
 ### 3. 一秒统一调度与限速预算
 
-一个 1 秒 Tick 使用固定四拍轮转：`Trenches → 1m Rank → Trenches → 5m Rank`。因此 Trenches 每 2 秒、两个 Rank 各每 4 秒拉取一次，且每个 Tick 只发一个基础 HTTP 请求；每个来源仍最多一个在途请求，慢来源只跳过自身排定 Tick。基础平均负载为 1 request/s、2 weight/s，本地令牌桶上限仍为 10 weight/s；余量供按需 Security，离线 Kline/Pool 优先级最低。
+一个 1 秒 Tick 使用固定四拍轮转：`Trenches → 1m Rank → Trenches → 5m Rank`。因此 Trenches 每 2 秒、两个 Rank 各每 4 秒拉取一次，且每个 Tick 只发一个基础 HTTP 请求；每个来源仍最多一个在途请求，慢来源只跳过自身排定 Tick。基础平均负载为 1 request/s、2 weight/s，本地令牌桶上限为 5 weight/s；余量供按需 Security，离线 Kline/Pool 优先级最低。
 
-Security 队列最大并发为 3，但仍受同一令牌桶约束，重试也消耗令牌。429 进入全局状态机：只接受合法未来 reset header/body，缺失或非法时默认冷却 5 分钟，并把 `cooldown_until` 写入 `runtime_state`；重启时先恢复该状态。恢复时先实时来源、再 Security、最后离线作业。普通网络/5xx 只重试一次，429 不走普通重试。
+Security 队列最大并发为 3，但仍受同一令牌桶约束，重试也消耗令牌。429 进入全局状态机：只接受合法未来 reset header/body，并在 reset 后增加 1 秒安全缓冲；缺失或非法时默认冷却 5 分钟，并把 `cooldown_until` 写入 `runtime_state`。重启时先恢复该状态，恢复顺序为实时来源、Security、离线作业。普通网络/5xx 只重试一次，429 不走普通重试。
 
 选择理由：2026-08-25 实际部署证实每秒并发三个基础请求会持续触发 429；固定轮转在不增加三个周期配置的前提下保留秒级发现，并为候选 Security 留出请求余量。替代方案为每个接口设置独立 Cron 会让重叠、预算和调参更难理解。
 
@@ -117,7 +117,7 @@ Pino 记录结构化事件和 request correlation id，但对 API Key、Bot Toke
 ## Risks / Trade-offs
 
 - [GMGN 是单点，接口或 Schema 变化会停止信号] → Adapter 契约测试、启动自检、失败关闭、结构化告警，并保留 CLI 仅作人工诊断。
-- [高频榜单加候选 Security 可能触发限流] → 每秒一个基础请求的固定轮转、全局 weight 10/s、本地令牌桶、候选预热边界、离线任务降级和按 reset 时间全局冷却。
+- [高频榜单加候选 Security 可能触发限流] → 每秒一个基础请求的固定轮转、本地 5 weight/s 令牌桶、候选预热边界、离线任务降级，以及 reset 后额外 1 秒的全局冷却缓冲。
 - [GMGN 可见时间不等于链上事件时间] → 分别记录 source captured、qualified、security、sent 时间；影子期只承诺 Bot 可控延迟。
 - [曲线信号风险高且没有 DEX LP] → 使用生命周期感知的必需安全字段、观察型提示和单独统计曲线毕业率，不宣称绝对安全。
 - [极端行情下价格可能在发送前成倍变化] → 保存多阶段价格、市值并执行发送前回落检查；高涨幅仍可作为明确标记的观察型信号。

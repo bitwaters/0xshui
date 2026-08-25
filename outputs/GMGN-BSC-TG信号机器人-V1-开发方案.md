@@ -294,7 +294,7 @@ Trenches       weight 3 / 2秒
 本地统一限速设置为：
 
 ```text
-10 weight/秒
+5 weight/秒
 ```
 
 剩余容量用于 Token Security 和低频结果采集。Security 最大并发为 3，但所有请求仍受同一限速器和 429 全局冷却控制。
@@ -312,7 +312,7 @@ Trenches       weight 3 / 2秒
 
 - 收到 429 后暂停全部 GMGN 请求，而不是只暂停当前接口。
 - 优先采用合法的未来 `X-RateLimit-Reset`，其次采用响应中的合法未来 `reset_at`；两者缺失或非法时默认冷却 5 分钟。
-- 将 `cooldown_until` 保存到 `runtime_state`，服务重启后继续遵守未结束的冷却。
+- 有效 reset 时间额外增加 1 秒安全缓冲；将 `cooldown_until` 保存到 `runtime_state`，服务重启后继续遵守未结束的冷却。
 - 冷却期间不发起任何 GMGN 请求。
 - 冷却结束后逐步恢复，先恢复榜单，再恢复 Security 和离线任务。
 - 离线 Kline 和结果采集在限流压力下可以延迟，不影响实时榜单。
@@ -1286,7 +1286,7 @@ gmgn:
   request_timeout: 5s
   network_retry: 1
   max_response_size: 10MB
-  local_weight_limit_per_second: 10
+  local_weight_limit_per_second: 5
   security_cache: 60s
   security_max_age_at_send: 10s
   security_max_concurrency: 3
@@ -1593,7 +1593,6 @@ config_version
 - [GMGN Token 官方能力说明](https://github.com/GMGNAI/gmgn-skills/blob/main/skills/gmgn-token/SKILL.md)
 - [GMGN 官方 OpenApiClient 与鉴权实现](https://github.com/GMGNAI/gmgn-skills/blob/main/src/client/OpenApiClient.ts)
 - [GMGN CLI 官方 npm 包（仅作开发诊断）](https://www.npmjs.com/package/gmgn-cli)
-- [GMGN 官方数据抓取白名单说明（公开参考上限 2 requests/s）](https://docs.gmgn.ai/index/cooperation-api-data-crawling-ip-whitelist)
 - [Telegram Bot API：InlineKeyboardButton / CopyTextButton](https://core.telegram.org/bots/api#inlinekeyboardbutton)
 - [BNB Chain：Four.meme Bonding Curve 与 PancakeSwap 迁移说明](https://www.bnbchain.org/en/blog/how-to-launch-a-memecoin-on-bnb-chain-a-step-by-step-guide)
 - [USENIX Security：BSC Token Spammer、Rug Pull 与 Sniper Bot 研究](https://www.usenix.org/system/files/usenixsecurity23-cernera.pdf)

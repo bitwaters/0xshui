@@ -12,6 +12,7 @@ import { normalizeBscAddress } from "./normalize.js";
 
 const DEFAULT_FALLBACK_COOLDOWN_MS = 5 * 60_000;
 const MAX_ACCEPTED_RESET_MS = 24 * 60 * 60_000;
+const RATE_LIMIT_RESET_BUFFER_MS = 1_000;
 const BSC_TRENCHES_QUOTE_TYPES = [6, 7, 1, 16, 8, 3, 9, 10, 2, 17, 18, 0] as const;
 
 type FetchImplementation = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -162,7 +163,10 @@ function validReset(value: unknown, now: number): number | null {
     return null;
   }
   const milliseconds = raw < 1_000_000_000_000 ? raw * 1_000 : raw;
-  return milliseconds > now && milliseconds <= now + MAX_ACCEPTED_RESET_MS ? milliseconds : null;
+  const bufferedMilliseconds = milliseconds + RATE_LIMIT_RESET_BUFFER_MS;
+  return milliseconds > now && bufferedMilliseconds <= now + MAX_ACCEPTED_RESET_MS
+    ? bufferedMilliseconds
+    : null;
 }
 
 function resolveCooldown(response: Response, body: unknown, now: number): GmgnRateLimitError {

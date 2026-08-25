@@ -17,7 +17,7 @@ gmgn:
   request_timeout: 5s
   network_retry: 1
   max_response_size: 10MB
-  local_weight_limit_per_second: 10
+  local_weight_limit_per_second: 5
   security_cache: 60s
   security_max_age_at_send: 10s
   security_max_concurrency: 3
