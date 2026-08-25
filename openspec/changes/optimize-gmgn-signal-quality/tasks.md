@@ -23,4 +23,4 @@
 
 - [x] 5.1 Update replay, fixtures, operator documentation, and cumulative sample-based acceptance disclosures
 - [x] 5.2 Run migration, lint, typecheck, unit/integration/replay suites and perform a structured review with fixes
-- [ ] 5.3 Commit and push locally, deploy only by GitHub pull plus Docker Compose, and verify live GMGN/Telegram/storage health without editing the server
+- [x] 5.3 Commit and push locally, deploy only by GitHub pull plus Docker Compose, and verify live GMGN/Telegram/storage health without editing the server
