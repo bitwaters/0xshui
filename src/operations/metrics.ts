@@ -20,6 +20,7 @@ export interface OperationalMetrics {
   readonly pendingOutcomeJobs: number;
   readonly cooldownUntil: number | null;
   readonly outcomeCoverage15: number | null;
+  readonly outcomeCoverage1h: number | null;
   readonly hitRate15: number | null;
   readonly largeGainRate1h: number | null;
   readonly medianMfe15: number | null;
@@ -50,8 +51,8 @@ function latency(values: readonly number[]): LatencyMetric {
 export class MetricsService {
   public constructor(private readonly repository: PersistenceRepository) {}
 
-  public collect(from: number, to: number): OperationalMetrics {
-    const rows = this.repository.listOperationalSignals(from, to);
+  public collect(from: number, to: number, configVersion?: number): OperationalMetrics {
+    const rows = this.repository.listOperationalSignals(from, to, configVersion);
     const qualified: number[] = [];
     const fastSource: number[] = [];
     const security: number[] = [];
@@ -81,7 +82,10 @@ export class MetricsService {
         telegram.push(row.sentAt - row.telegramAttemptedAt);
       }
     }
-    const stats = aggregateStatistics(this.repository.listStatisticsSignals(from, to), to);
+    const stats = aggregateStatistics(
+      this.repository.listStatisticsSignals(from, to, configVersion),
+      to,
+    );
     return {
       from,
       to,
@@ -92,9 +96,10 @@ export class MetricsService {
       fastSourceToSent: latency(fastSource),
       securityToSent: latency(security),
       telegramAttemptToSent: latency(telegram),
-      pendingOutcomeJobs: this.repository.countPendingOutcomes(),
+      pendingOutcomeJobs: this.repository.countPendingOutcomes(configVersion),
       cooldownUntil: this.repository.getRuntimeState<number>("gmgn_cooldown_until"),
       outcomeCoverage15: stats.coverage15,
+      outcomeCoverage1h: stats.coverage1h,
       hitRate15: stats.hitRate15,
       largeGainRate1h: stats.largeGainRate1h,
       medianMfe15: stats.medianMfe15,

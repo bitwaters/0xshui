@@ -1,4 +1,5 @@
 import {
+  configForSignalVersion,
   loadAppConfig,
   loadRuntimeCredentials,
   type AppConfig,
@@ -50,7 +51,7 @@ export function bootstrapApplication(
   try {
     database = openDatabase({ path: config.storage.sqlite_path });
     const repository = new PersistenceRepository(database);
-    const configVersion = repository.registerConfigVersion(config);
+    const configVersion = repository.registerConfigVersion(configForSignalVersion(config));
     const recoveredState = repository.recoverStartupState(
       Date.now(),
       config.noise.creator_cooldown,

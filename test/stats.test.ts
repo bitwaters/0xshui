@@ -21,6 +21,7 @@ function row(
 ): StatisticsSignalRow {
   return {
     signalId: id,
+    configVersion: 1,
     tokenKey: `0x${String(id).padStart(40, "0")}`,
     lifecycle: "graduated",
     state: "sent",
@@ -144,7 +145,7 @@ test("unknown source metadata is normalized before HTML rendering", () => {
 });
 
 test("stats request parsing and timezone-aware day ranges are deterministic", () => {
-  assert.equal(parseStatsRequest(""), "today");
+  assert.equal(parseStatsRequest(""), "current");
   assert.equal(parseStatsRequest(" 7D "), "7d");
   assert.equal(parseStatsRequest("detail"), "detail");
   assert.equal(parseStatsRequest("90d"), null);
@@ -159,11 +160,13 @@ test("daily report claim prevents a duplicate after restart", async () => {
   const database = openDatabase({ path: ":memory:" });
   try {
     const repository = new PersistenceRepository(database);
+    const configVersion = repository.registerConfigVersion({ stats: "current" }, NOW - HOUR);
     const service = new StatsService({
       repository,
       timeZone: "Asia/Shanghai",
       hitGain: 0.3,
       largeGain: 1,
+      configVersion,
       now: () => NOW,
     });
     const sent: string[] = [];
@@ -178,6 +181,7 @@ test("daily report claim prevents a duplicate after restart", async () => {
       timeZone: "Asia/Shanghai",
       hitGain: 0.3,
       largeGain: 1,
+      configVersion,
       now: () => NOW,
     });
     assert.equal(await afterRestart.sendDailyOnce(async () => undefined), false);

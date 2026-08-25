@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 
-import { loadAppConfig } from "../config/index.js";
+import { configForSignalVersion, loadAppConfig } from "../config/index.js";
 import { openDatabase, PersistenceRepository } from "../db/index.js";
 import { AcceptanceService, acceptanceConfigKey } from "../operations/index.js";
 
@@ -14,8 +14,12 @@ try {
   );
   database = openDatabase({ path: config.storage.sqlite_path });
   const repository = new PersistenceRepository(database);
-  repository.registerConfigVersion(config);
-  const service = new AcceptanceService(repository, acceptanceConfigKey(config));
+  const configVersion = repository.registerConfigVersion(configForSignalVersion(config));
+  const service = new AcceptanceService(
+    repository,
+    acceptanceConfigKey(config),
+    configVersion,
+  );
   const approve = process.argv.includes("--approve");
   const reject = process.argv.includes("--reject");
   if (approve && reject) throw new Error("Choose either --approve or --reject");

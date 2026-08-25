@@ -15,6 +15,7 @@ export interface MaintenanceResult {
   readonly highSnapshotsDeleted: number;
   readonly securityChecksDeleted: number;
   readonly signalsDeleted: number;
+  readonly researchSamplesDeleted: number;
   readonly configVersionsDeleted: number;
   readonly sizeBeforeBytes: number;
   readonly sizeAfterBytes: number;
@@ -59,13 +60,25 @@ export function runDatabaseMaintenance(
     .prepare("DELETE FROM signals WHERE updated_at < ? AND state != 'delivery_pending'")
     .run(signalCutoff).changes;
 
+  let researchSamplesDeleted = database
+    .prepare("DELETE FROM research_samples WHERE sampled_at < ?")
+    .run(signalCutoff).changes;
+
   const configVersionsDeleted = database
     .prepare(`
       DELETE FROM config_versions
       WHERE created_at < ?
         AND NOT EXISTS (SELECT 1 FROM signals WHERE signals.config_version = config_versions.version)
+        AND NOT EXISTS (
+          SELECT 1 FROM research_samples
+          WHERE research_samples.config_version = config_versions.version
+        )
     `)
     .run(signalCutoff).changes;
+
+  const highSnapshotsDeleted = database
+    .prepare("DELETE FROM token_snapshots WHERE sampling_level = 'high' AND captured_at < ?")
+    .run(snapshotCutoff).changes;
 
   const deleteOrdinaryBatch = database.prepare(`
     DELETE FROM token_snapshots WHERE id IN (
@@ -82,9 +95,16 @@ export function runDatabaseMaintenance(
     }
   }
 
-  const highSnapshotsDeleted = database
-    .prepare("DELETE FROM token_snapshots WHERE sampling_level = 'high' AND captured_at < ?")
-    .run(snapshotCutoff).changes;
+  const deleteResearchBatch = database.prepare(`
+    DELETE FROM research_samples WHERE id IN (
+      SELECT id FROM research_samples ORDER BY sampled_at, id LIMIT 100
+    )
+  `);
+  while (logicalDatabaseSize(database) > options.softLimitBytes) {
+    const deleted = deleteResearchBatch.run().changes;
+    researchSamplesDeleted += deleted;
+    if (deleted === 0) break;
+  }
 
   database.pragma("wal_checkpoint(TRUNCATE)");
   database.pragma("incremental_vacuum");
@@ -94,6 +114,7 @@ export function runDatabaseMaintenance(
     highSnapshotsDeleted,
     securityChecksDeleted,
     signalsDeleted,
+    researchSamplesDeleted,
     configVersionsDeleted,
     sizeBeforeBytes,
     sizeAfterBytes: totalDatabaseSize(options.databasePath),

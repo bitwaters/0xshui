@@ -10,6 +10,7 @@ export interface SourceStatistics {
   readonly signals: number;
   readonly hit15: number;
   readonly eligible15: number;
+  readonly eligible1h: number;
   readonly medianMfe: number | null;
   readonly medianMae: number | null;
   readonly averageLatencyMs: number | null;
@@ -22,9 +23,13 @@ export interface SignalStatistics {
   readonly pending15: number;
   readonly evaluated15: number;
   readonly evaluated1h: number;
+  readonly validSamples1h: number;
+  readonly nextReviewAt: number;
+  readonly reviewStage: "collecting" | "first_review" | "baseline";
   readonly hit15: number;
   readonly largeGain1h: number;
   readonly coverage15: number | null;
+  readonly coverage1h: number | null;
   readonly hitRate15: number | null;
   readonly largeGainRate1h: number | null;
   readonly medianReturn1m: number | null;
@@ -209,6 +214,7 @@ export function aggregateStatistics(
       const sourceMae: number[] = [];
       const sourceLatencies: number[] = [];
       let eligible15 = 0;
+      let eligible1h = 0;
       let sourceHits = 0;
       for (const row of rows) {
         const outcome = outcomeAt(row, FIFTEEN_MINUTES);
@@ -219,6 +225,10 @@ export function aggregateStatistics(
           if (result.mfe !== undefined) sourceMfe.push(result.mfe);
           if (result.mae !== undefined) sourceMae.push(result.mae);
         }
+        const outcome1h = outcomeAt(row, ONE_HOUR);
+        if (outcome1h !== undefined && KNOWN_OUTCOME_STATES.has(outcome1h.state)) {
+          eligible1h += 1;
+        }
         if (row.qualifiedAt !== null && row.sentAt >= row.qualifiedAt) {
           sourceLatencies.push(row.sentAt - row.qualifiedAt);
         }
@@ -228,6 +238,7 @@ export function aggregateStatistics(
         signals: rows.length,
         hit15: sourceHits,
         eligible15,
+        eligible1h,
         medianMfe: median(sourceMfe),
         medianMae: median(sourceMae),
         averageLatencyMs: average(sourceLatencies),
@@ -235,6 +246,12 @@ export function aggregateStatistics(
     });
   const curveSignals = signals.filter((signal) => signal.lifecycle === "curve").length;
   const confirmed = signals.filter((signal) => signal.state === "confirmed").length;
+  const nextReviewAt =
+    evaluated1h < 30
+      ? 30
+      : evaluated1h < 100
+        ? 100
+        : (Math.floor(evaluated1h / 50) + 1) * 50;
   return {
     signals: signals.length,
     due15,
@@ -242,9 +259,13 @@ export function aggregateStatistics(
     pending15: signals.length - due15,
     evaluated15,
     evaluated1h,
+    validSamples1h: evaluated1h,
+    nextReviewAt,
+    reviewStage: evaluated1h >= 100 ? "baseline" : evaluated1h >= 30 ? "first_review" : "collecting",
     hit15,
     largeGain1h,
     coverage15: due15 === 0 ? null : evaluated15 / due15,
+    coverage1h: due1h === 0 ? null : evaluated1h / due1h,
     hitRate15: evaluated15 === 0 ? null : hit15 / evaluated15,
     largeGainRate1h: evaluated1h === 0 ? null : largeGain1h / evaluated1h,
     medianReturn1m: median(oneMinuteReturns),

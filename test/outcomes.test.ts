@@ -173,6 +173,50 @@ test("15-minute worker calculates 1m, 5m, 15m, MFE, and MAE", async () => {
   }
 });
 
+test("outcome worker prioritizes real signals before research samples", async () => {
+  const { database, repository } = setupSent();
+  try {
+    const configVersion = repository.getConfigVersion()?.version;
+    assert.notEqual(configVersion, undefined);
+    assert.equal(
+      repository.createResearchSample({
+        tokenKey: "0x4444444444444444444444444444444444444444",
+        configVersion: configVersion ?? 0,
+        sampledAt: NOW,
+        lifecycle: "graduated",
+        baselinePrice: 1,
+        feature: { test: true },
+        detectorVersion: "detector-v1",
+        upstreamFilterVersion: "safe-v1",
+        adapterVersion: "adapter-v1",
+        outcomeCheckpointsMs: [FIFTEEN, HOUR],
+      }),
+      true,
+    );
+    const worker = new OutcomeWorker({
+      repository,
+      dataSource: {
+        fetchKlines: async () => [],
+        fetchPool: async (tokenKey) => ({
+          status: "found",
+          pool: { ...pool(), tokenKey, address: tokenKey },
+          hasAlternativePool: false,
+        }),
+      },
+      now: () => NOW + FIFTEEN,
+    });
+    assert.equal(await worker.runDue(1), 1);
+    assert.equal(outcomeRow(database).state, "no_trade");
+    assert.equal(repository.countPendingResearchOutcomes(), 2);
+    assert.equal(await worker.runDue(1), 1);
+    const research = repository.listResearchSamples(0, NOW + 1)[0];
+    assert.equal(research?.outcomes.find((item) => item.checkpointMs === FIFTEEN)?.state, "no_trade");
+    assert.equal(repository.countPendingResearchOutcomes(), 1);
+  } finally {
+    database.close();
+  }
+});
+
 test("empty Kline needs corroboration for no_trade and pool_removed", async () => {
   const stillLiquid = setupSent();
   try {

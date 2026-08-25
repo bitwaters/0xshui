@@ -75,7 +75,7 @@ function addCandidate(
 
 test("migration configures required pragmas and is idempotent", () => {
   withDatabase(({ path, database }) => {
-    assert.equal(database.pragma("user_version", { simple: true }), 3);
+    assert.equal(database.pragma("user_version", { simple: true }), 4);
     assert.equal(database.pragma("journal_mode", { simple: true }), "wal");
     assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
     assert.equal(database.pragma("auto_vacuum", { simple: true }), 2);
@@ -84,7 +84,7 @@ test("migration configures required pragmas and is idempotent", () => {
 
     const reopened = openDatabase({ path });
     try {
-      assert.equal(reopened.pragma("user_version", { simple: true }), 3);
+      assert.equal(reopened.pragma("user_version", { simple: true }), 4);
       const tables = reopened
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
         .all() as Array<{ name: string }>;
@@ -92,6 +92,8 @@ test("migration configures required pragmas and is idempotent", () => {
         tables.map(({ name }) => name).sort(),
         [
           "config_versions",
+          "research_outcomes",
+          "research_samples",
           "runtime_state",
           "security_checks",
           "signal_outcomes",
@@ -99,7 +101,7 @@ test("migration configures required pragmas and is idempotent", () => {
           "token_snapshots",
         ],
       );
-      reopened.pragma("user_version = 4");
+      reopened.pragma("user_version = 5");
     } finally {
       reopened.close();
     }
@@ -218,6 +220,54 @@ test("candidate updates are parameterized and delivery state is single-winner", 
   });
 });
 
+test("research sampling is atomic, deduplicated, and capped at five per rolling minute", () => {
+  withDatabase(({ database, repository }) => {
+    const configVersion = repository.registerConfigVersion({ research: true }, NOW);
+    for (let index = 0; index < 6; index += 1) {
+      const tokenKey = `0x${(index + 1).toString(16).padStart(40, "0")}`;
+      assert.equal(
+        repository.createResearchSample({
+          tokenKey,
+          configVersion,
+          sampledAt: NOW + index,
+          lifecycle: "graduated",
+          baselinePrice: 1,
+          feature: { tokenKey, sampledAt: NOW + index },
+          detectorVersion: "detector-v1",
+          upstreamFilterVersion: "safe-v1",
+          adapterVersion: "adapter-v1",
+          outcomeCheckpointsMs: [15 * 60_000, 60 * 60_000],
+        }),
+        index < 5,
+      );
+    }
+    assert.equal(
+      repository.createResearchSample({
+        tokenKey: `0x${"1".padStart(40, "0")}`,
+        configVersion,
+        sampledAt: NOW + 60_001,
+        lifecycle: "graduated",
+        baselinePrice: 1,
+        feature: {},
+        detectorVersion: "detector-v1",
+        upstreamFilterVersion: "safe-v1",
+        adapterVersion: "adapter-v1",
+        outcomeCheckpointsMs: [15 * 60_000, 60 * 60_000],
+      }),
+      false,
+      "one token/config pair must remain unique after the rate window expires",
+    );
+    assert.equal(repository.listResearchSamples(0, NOW + 60_000).length, 5);
+    assert.equal(repository.countPendingResearchOutcomes(), 10);
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM research_outcomes").get() as {
+        count: number;
+      }).count,
+      10,
+    );
+  });
+});
+
 test("startup recovery fails closed and restores persisted operational state", () => {
   withDatabase(({ path, database, repository }) => {
     const configVersion = repository.registerConfigVersion({ mode: "shadow" }, NOW);
@@ -272,6 +322,7 @@ test("startup recovery fails closed and restores persisted operational state", (
 
 test("maintenance applies retention and soft-limit snapshot priority", () => {
   withDatabase(({ path, database, repository }) => {
+    const configVersion = repository.registerConfigVersion({ research: true }, NOW);
     repository.appendSourceBatch("trenches", [
       snapshot("old-ordinary", NOW - 15 * DAY),
       snapshot("fresh-ordinary", NOW, "ordinary"),
@@ -285,6 +336,18 @@ test("maintenance applies retention and soft-limit snapshot priority", () => {
       payload: {},
       adapterVersion: "adapter-v1",
     });
+    repository.createResearchSample({
+      tokenKey: "0x1111111111111111111111111111111111111111",
+      configVersion,
+      sampledAt: NOW,
+      lifecycle: "graduated",
+      baselinePrice: 1,
+      feature: { retainedOnlyWithoutPressure: true },
+      detectorVersion: "detector-v1",
+      upstreamFilterVersion: "safe-v1",
+      adapterVersion: "adapter-v1",
+      outcomeCheckpointsMs: [15 * 60_000, 60 * 60_000],
+    });
 
     const result = runDatabaseMaintenance(database, {
       databasePath: path,
@@ -296,10 +359,12 @@ test("maintenance applies retention and soft-limit snapshot priority", () => {
     assert.equal(result.ordinarySnapshotsDeleted, 2);
     assert.equal(result.highSnapshotsDeleted, 1);
     assert.equal(result.securityChecksDeleted, 1);
+    assert.equal(result.researchSamplesDeleted, 1);
     const remaining = database
       .prepare("SELECT token_key FROM token_snapshots ORDER BY token_key")
       .all();
     assert.deepEqual(remaining, [{ token_key: "fresh-high" }]);
+    assert.equal(repository.listResearchSamples(0, NOW + 1).length, 0);
   });
 });
 

@@ -4,7 +4,11 @@ import test from "node:test";
 
 import { parse as parseYaml } from "yaml";
 
-import { loadAppConfig, parseAppConfig } from "../src/config/index.js";
+import {
+  configForSignalVersion,
+  loadAppConfig,
+  parseAppConfig,
+} from "../src/config/index.js";
 
 function rawDefaultConfig(): Record<string, unknown> {
   return parseYaml(readFileSync("config/default.yaml", "utf8")) as Record<string, unknown>;
@@ -22,6 +26,27 @@ test("loads and normalizes the documented default configuration", () => {
   assert.deepEqual(config.outcomes.checkpoints, [15 * 60_000, 60 * 60_000]);
   assert.ok(Object.isFrozen(config));
   assert.ok(Object.isFrozen(config.gmgn));
+});
+
+test("signal configuration version ignores only delivery activation switches", () => {
+  const base = loadAppConfig();
+  const shadow = configForSignalVersion(base);
+  const production = configForSignalVersion({
+    ...base,
+    mode: "production",
+    telegram: { ...base.telegram, enabled: true },
+  });
+  assert.deepEqual(production, shadow);
+  assert.notDeepEqual(
+    configForSignalVersion({
+      ...base,
+      fast_rank_trigger: {
+        ...base.fast_rank_trigger,
+        max_rank_1m: base.fast_rank_trigger.max_rank_1m + 1,
+      },
+    }),
+    shadow,
+  );
 });
 
 test("supports only the explicit Telegram deployment override", () => {

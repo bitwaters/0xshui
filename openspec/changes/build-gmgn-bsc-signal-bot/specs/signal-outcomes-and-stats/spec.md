@@ -60,7 +60,7 @@
 - **THEN** 系统按固定分母规则计算命中率并单独展示完成数、待评估数和覆盖率
 
 ### Requirement: Balanced quality statistics
-系统 SHALL 展示推送数、命中率、1m/5m/15m/1h 收益、MFE、MAE、曲线毕业率、双榜确认率、信号来源拆分和端到端延迟。曲线信号在 T+1h 前出现 GMGN `completed` 事件时记为已毕业；T+1h 时仍有新鲜 Trenches 数据且处于 `new_creation/near_completion` 时记为未毕业；其他情况记为毕业状态未知。曲线毕业率 SHALL 等于已毕业数除以已毕业加未毕业数，未知样本只降低覆盖率。双榜确认率 SHALL 等于 `confirmed` 数除以全部 `sent+confirmed` 首次信号数。默认卡片的收益、MFE、MAE 和延迟 SHALL 使用中位数；详细统计可以额外展示平均延迟。系统 SHALL 明确最高涨幅是价格触达研究指标而非可成交收益。
+系统 SHALL 展示推送数、命中率、1m/5m/15m/1h 收益、MFE、MAE、曲线毕业率、双榜确认率、信号来源拆分和端到端延迟。所有信号质量统计 MUST 限定到单一 `config_version`，不得把不同阈值版本混合为一个命中率。曲线信号在 T+1h 前出现 GMGN `completed` 事件时记为已毕业；T+1h 时仍有新鲜 Trenches 数据且处于 `new_creation/near_completion` 时记为未毕业；其他情况记为毕业状态未知。曲线毕业率 SHALL 等于已毕业数除以已毕业加未毕业数，未知样本只降低覆盖率。双榜确认率 SHALL 等于 `confirmed` 数除以全部 `sent+confirmed` 首次信号数。默认卡片的收益、MFE、MAE 和延迟 SHALL 使用中位数；详细统计可以额外展示平均延迟。系统 SHALL 明确最高涨幅是价格触达研究指标而非可成交收益。
 
 #### Scenario: Curve graduation evidence is incomplete
 - **WHEN** 曲线信号在 T+1h 前没有 completed 事件，且 T+1h 附近也没有新鲜 Trenches 生命周期数据
@@ -69,3 +69,10 @@
 #### Scenario: Detailed source report is generated
 - **WHEN** 请求详细统计
 - **THEN** 系统按曲线加速、1m 极速突破、跨来源启动和双榜确认展示样本量、命中率、中位 MFE/MAE 与平均延迟
+
+### Requirement: Sample progress milestones
+系统 SHALL 将已成熟的 T+1h `completed`、`no_trade` 和 `pool_removed` 视为有效样本，`api_missing`、`retry_exhausted` 和未到期作为覆盖缺口而不是失败样本。统计 SHALL 展示当前配置的有效样本数和下一复盘节点：首次 30，然后 100，此后每增加 50。
+
+#### Scenario: A review milestone is reached
+- **WHEN** 当前配置有效 T+1h 样本到达 30、100 或之后的 50 倍数节点
+- **THEN** 统计卡片标记已到达的复盘阶段并显示下一节点

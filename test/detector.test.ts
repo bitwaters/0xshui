@@ -9,6 +9,7 @@ import {
   detectTrigger,
   evaluateDetector,
   evaluateSafety,
+  passesResearchSafety,
   selectWithinNoiseLimits,
   shouldPreheatSecurity,
   type CandidateReference,
@@ -582,6 +583,28 @@ test("Security preheat remains candidate-scoped", () => {
   });
   assert.equal(shouldPreheatSecurity(curveCandidate), true);
   assert.equal(shouldPreheatSecurity(input()), false);
+});
+
+test("research cohort accepts only candidates that pass the production safety rules", () => {
+  const market = {
+    trenches: [observation(NOW, trench())],
+    rank1m: [],
+    rank5m: [],
+    sourceFresh: { trenches: true, rank_1m: false, rank_5m: false },
+  };
+  assert.equal(
+    passesResearchSafety(
+      input({ market, security: { capturedAt: NOW, value: security() } }),
+    ),
+    true,
+  );
+  assert.equal(
+    passesResearchSafety(
+      input({ market, security: { capturedAt: NOW, value: security({ isHoneypot: true }) } }),
+    ),
+    false,
+  );
+  assert.equal(passesResearchSafety(input({ market })), false);
 });
 
 test("curve trigger rejects every just-below boundary and accepts smart-money alternative", () => {

@@ -92,19 +92,21 @@ Security 预热只覆盖 1m Top30 或低门槛曲线候选，成功结果缓存 
 
 选择理由：Telegram Bot API 没有客户端 exactly-once 键，网络结果模糊时无法同时保证“不漏发”和“不重复”。V1 采用简单的 at-most-once 偏好：SQLite 唯一约束处理本地重复，模糊结果失败关闭并交给日志诊断，不增加消息队列或回查服务。编辑确认比再次推送更能控制频道噪音。
 
-### 9. 结果评估与统计隔离
+### 9. 结果评估、版本统计与样本验收
 
 Outcome Worker 使用持久化到期作业，在 T+15m、T+1h 拉取从 sent_at 开始的 30 秒 Kline。每个检查点在到期后 10 分钟内最多重试 3 次并写入终态。撤池仅在已有 Pool 基线和二次成功复查证据完整时成立。
 
-统计查询读取已落库结果，不触发实时 GMGN 请求。只有明确 `sent/confirmed` 的消息进入推送和收益统计，`delivery_unknown` 只进入运维指标。默认卡片的收益、MFE、MAE 和延迟使用中位数，并并列展示覆盖率；详细统计可以额外显示平均延迟。曲线毕业率和双榜确认率使用 specs 固定分母。所有数据库时间为 UTC，展示和日报边界使用配置时区；`runtime_state` 保存最后日报日期，保证重启后每天最多发送一次。
+统计查询读取已落库结果，不触发实时 GMGN 请求。只有明确 `sent/confirmed` 的消息进入推送和收益统计，`delivery_unknown` 只进入运维指标。默认 `/stats` 展示当前 `config_version` 的累计数据，7d/30d 也只统计当前版本，避免混合不同阈值。版本化时仅规范化忽略部署开关 `mode` 和 `telegram.enabled`，因此私人 Shadow 切换到正式频道不会丢失样本；任何检测、安全、轮询、限频或结果参数变化仍生成新版本。有效样本只计入已成熟的 T+1h `completed/no_trade/pool_removed`；30 个用于首次复盘，100 个形成基线，此后每新增 50 个提示下一次复盘。
+
+正式频道的人工批准使用样本门槛：当前配置至少 100 个有效 T+1h 信号，三条路径各至少 20 个，结果覆盖率至少 90%，延迟至少 30 个样本并通过原 P95 目标，且同一配置累计至少 10,000 次 GMGN 请求、成功率至少 99%、无失控 429 和关键 Schema 失败。运行时长和心跳仍作为运维上下文展示，但不是质量通过条件。
 
 选择理由：实时路径不应为统计阻塞；明确终态和覆盖率可避免数据缺失导致幸存者偏差。
 
-### 10. SQLite 数据模型与保留
+### 10. SQLite 数据模型、紧凑研究样本与保留
 
-核心表为 `token_snapshots`、`security_checks`、`signals`、`signal_outcomes`、`config_versions`、`runtime_state`。数据库启用 WAL、外键、busy timeout 和 `auto_vacuum=INCREMENTAL`。`signals.token_key` 唯一；配置保存内容哈希和版本号。
+核心表为 `token_snapshots`、`security_checks`、`signals`、`signal_outcomes`、`research_samples`、`research_outcomes`、`config_versions`、`runtime_state`。数据库启用 WAL、外键、busy timeout 和 `auto_vacuum=INCREMENTAL`。`signals.token_key` 唯一；配置保存内容哈希和版本号。
 
-高频候选保存所有变化，普通榜单 update 最多每 5 秒一条。每日执行保留清理、WAL checkpoint 和 incremental vacuum；5 GB 软上限触发优先级清理。
+高频候选保存所有变化，普通榜单 update 最多每 5 秒一条。Security 已通过的预热候选在每分钟最多 5 个的全局上限内，每个 token/config 只保存一份当时的最近市场窗口、Security、首次发现基线和价格，并复用低优先级 Outcome Worker 采集 15m/1h 结果。研究样本不计入 TG 推送统计；回算结果明确披露它是预热候选的受限样本、不包含完整跨 token 限频语义。每日执行保留清理、WAL checkpoint 和 incremental vacuum；5 GB 软上限先清普通榜单快照，再清最旧辅助研究样本，真实信号和结果不因容量压力删除。
 
 选择理由：better-sqlite3 的同步事务有利于严格事件顺序和小型单进程系统。替代 PostgreSQL 会增加部署依赖；仅内存存储无法支持幂等、结果统计和回算。
 
@@ -134,5 +136,5 @@ Pino 记录结构化事件和 request correlation id，但对 API Key、Bot Toke
 3. 实现变化事件、Detector、Security Gate、候选状态机和确定性单元测试，先写入模拟信号。
 4. 接入私有测试 Telegram，验证持久化去重、模糊发送保护、卡片、确认编辑、限频和安全重试。
 5. 实现结果作业、统计命令与 Replay Runner，使用固定 fixture 验证实时/回放一致。
-6. 运行至少 72 小时影子模式，检查 429、Schema、信号噪音、数据覆盖与延迟；达到功能和性能门禁后切换正式 Chat ID。
+6. 私人开发频道立即接收按正式规则通过的信号；在 30/100/每新增 50 个有效样本节点复盘，达到样本量、覆盖率、延迟和请求稳定性门禁后才允许人工批准正式 Chat ID。
 7. 部署回滚时停止进程、恢复上一应用版本和兼容的配置；数据库 migration 必须向前兼容或在部署前创建备份。若 GMGN 契约变化，保持正式推送关闭，直到 Adapter 与 fixture 更新并重新通过影子验证。

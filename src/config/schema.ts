@@ -304,6 +304,14 @@ export const appConfigSchema = z
 
 export type AppConfig = z.output<typeof appConfigSchema>;
 
+export function configForSignalVersion(config: Readonly<AppConfig>): AppConfig {
+  return {
+    ...config,
+    mode: "shadow",
+    telegram: { ...config.telegram, enabled: false },
+  };
+}
+
 export function parseAppConfig(input: unknown): AppConfig {
   return appConfigSchema.parse(input);
 }

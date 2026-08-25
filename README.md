@@ -34,8 +34,8 @@ The single-process runtime is fully wired. Formal-channel activation remains blo
 
 ## Modes
 
-- `shadow`: performs the configured analysis without sending to the production channel. Set `telegram.enabled=true` only for a private test channel.
-- `production`: requires `telegram.enabled=true`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`. Production activation remains blocked until the 72-hour shadow and latency gates pass.
+- `shadow`: runs the production detector rules and may send matching signals immediately to a private development channel when `telegram.enabled=true`.
+- `production`: requires `telegram.enabled=true`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`. Formal-channel activation remains blocked until the current configuration passes the sample, coverage, latency, and API-quality gates.
 
 Use a separate production YAML file and set `APP_CONFIG_PATH`; do not edit secrets into configuration files.
 
@@ -50,7 +50,7 @@ The default database path is `data/signals.sqlite`.
 
 ## Replay
 
-Replay reads stored events and a selected configuration version. It never calls GMGN or Telegram:
+Replay reads stored events, compact research samples, and a selected configuration version. It never calls GMGN or Telegram:
 
 ```bash
 npm run replay -- --config-version 1 --from 2026-08-01T00:00:00Z --to 2026-08-02T00:00:00Z
@@ -68,7 +68,7 @@ cp config/default.yaml config/local.yaml
 
 In the ignored `config/local.yaml`, keep `mode: shadow` and change only `telegram.enabled` to `true`. In the ignored `.env`, set `GMGN_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `APP_CONFIG_PATH=config/local.yaml`. Never use the future production Chat ID during this run.
 
-Start the same single process and keep it supervised for at least 72 hours:
+Start the same single process. Matching real signals are sent immediately to the private channel while samples accumulate:
 
 ```bash
 npm run migrate
@@ -81,7 +81,9 @@ Inspect the measured gates from the same directory and database:
 npm run acceptance
 ```
 
-The 72-hour clock advances only while the shadow process emits a fresh heartbeat. A restart within five minutes preserves the run; a longer outage or a system-clock rollback restarts the clock.
+Acceptance is sample-based, not time-based. The current configuration needs at least 100 valid T+1h signal outcomes, at least 20 from each of the three trigger paths, at least 90% T+1h outcome coverage, enough latency observations, 10,000 GMGN requests with at least 99% success, and no uncontrolled 429 or critical schema failure. Review signal quality at 30 samples, establish the first baseline at 100, then review every additional 50 samples.
+
+Security-passed preheat candidates are also stored as a compact research cohort, capped at five per rolling minute. Their 15m/1h outcomes support later parameter replay but never count as Telegram signals or acceptance samples. If the SQLite soft limit is reached after ordinary snapshots are pruned, the oldest auxiliary research samples are removed before any real signal result.
 
 ## Docker Compose deployment
 
@@ -97,13 +99,13 @@ docker compose logs --tail=100 bot
 
 Deploy code changes only by pushing them to GitHub and pulling them into the deployment directory before running Compose again. Do not edit application source on the server.
 
-The command exits with status 2 while samples, duration, coverage, rate-limit stability, or P95 latency gates are incomplete. Once all gates pass, approve only the current detection/safety parameter fingerprint:
+The command exits with status 2 while sample count, per-path count, coverage, request quality, rate-limit stability, or P95 latency gates are incomplete. Once all gates pass, approve only the current detection/safety parameter fingerprint:
 
 ```bash
 npm run acceptance -- --approve
 ```
 
-Use `npm run acceptance -- --reject` to revoke approval. `production` startup fails closed unless the current fingerprint is approved. Switching only from Shadow to Production preserves the fingerprint; changing detection, safety, noise, polling, or outcome parameters creates a new fingerprint and restarts acceptance sampling.
+Use `npm run acceptance -- --reject` to revoke approval. `production` startup fails closed unless the current fingerprint is approved. Signal configuration versions deliberately ignore only `mode` and `telegram.enabled`, so switching from private Shadow delivery to Production preserves the accumulated sample set. Changing detection, safety, noise, polling, or outcome parameters creates a new version and restarts acceptance sampling.
 
 ## Safe shutdown
 

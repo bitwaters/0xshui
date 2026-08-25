@@ -22,6 +22,7 @@ import {
   type ReplayReport,
   type ReplaySignal,
 } from "./types.js";
+import { evaluateResearchFeature } from "./research.js";
 
 const HISTORY_MS = 60_000;
 const HISTORY_LIMIT = 10;
@@ -262,23 +263,56 @@ export class ReplayRunner {
       }
     }
 
-    const actualRows = this.options.repository.listStatisticsSignals(this.options.from, this.options.to);
+    const actualRows = this.options.repository.listStatisticsSignals(
+      this.options.from,
+      this.options.to,
+      storedConfig.version,
+    );
     if (upstreamVersions.size > 1 || adapterVersions.size > 1) {
       throw new Error("Replay range contains incompatible upstream or adapter versions");
     }
     const actualSummary = this.options.repository.summarizeSignals(
       this.options.from,
       this.options.to,
+      storedConfig.version,
     );
     const evaluationAt = this.options.to + HOUR_MS;
     const replayQuality = aggregateStatistics(
-      this.replayRows(actualRows, signals),
+      this.replayRows(actualRows, signals, storedConfig.version),
       evaluationAt,
       config.outcomes.hit_gain,
       config.outcomes.large_gain,
     );
     const actualQuality = aggregateStatistics(
       actualRows,
+      evaluationAt,
+      config.outcomes.hit_gain,
+      config.outcomes.large_gain,
+    );
+    const researchSamples = this.options.repository.listResearchSamples(
+      this.options.from,
+      this.options.to,
+    );
+    const researchRows: StatisticsSignalRow[] = [];
+    for (const sample of researchSamples) {
+      const result = evaluateResearchFeature(sample.feature, config, storedConfig.version);
+      if (result.action !== "qualified" || result.evidence === undefined) continue;
+      researchRows.push({
+        signalId: -sample.id,
+        configVersion: storedConfig.version,
+        tokenKey: sample.tokenKey,
+        lifecycle: result.evidence.lifecycle,
+        state: "sent",
+        decision: result,
+        qualifiedAt: sample.sampledAt,
+        securityCompletedAt: sample.sampledAt,
+        sentAt: sample.sampledAt,
+        confirmedAt: null,
+        outcomes: sample.outcomes,
+      });
+    }
+    const researchQuality = aggregateStatistics(
+      researchRows,
       evaluationAt,
       config.outcomes.hit_gain,
       config.outcomes.large_gain,
@@ -310,10 +344,14 @@ export class ReplayRunner {
         medianLatencyMs: median(signals.map((signal) => signal.qualifiedAt - signal.discoveredAt)),
       },
       actualQuality: qualitySummary(actualQuality),
+      researchSampleCount: researchSamples.length,
+      researchSelectedCount: researchRows.length,
+      researchSelectedQuality: qualitySummary(researchQuality),
       scopeLimitations: [
         "仅覆盖已保存的 GMGN 上游过滤后候选，不能评估被上游过滤掉的代币。",
         "普通榜单 update 历史精度最多为 5 秒，高频候选保留全部变化。",
         "回放不调用 GMGN 或 Telegram；质量对比只使用数据库中已有结果。",
+        "研究质量仅基于 Security 已通过预热候选，每分钟最多 5 个，不包含完整跨 token 限频语义。",
       ],
     };
   }
@@ -344,12 +382,14 @@ export class ReplayRunner {
   private replayRows(
     rows: readonly StatisticsSignalRow[],
     signals: readonly ReplaySignal[],
+    configVersion: number,
   ): readonly StatisticsSignalRow[] {
     const actual = new Map(rows.map((row) => [row.tokenKey, row]));
     return signals.map((signal, index): StatisticsSignalRow => {
       const row = actual.get(signal.tokenKey);
       return {
         signalId: row?.signalId ?? -(index + 1),
+        configVersion,
         tokenKey: signal.tokenKey,
         lifecycle: signal.lifecycle,
         state: row?.state ?? "sent",

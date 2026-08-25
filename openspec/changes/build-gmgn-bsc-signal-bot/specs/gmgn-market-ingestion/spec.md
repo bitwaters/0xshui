@@ -104,17 +104,17 @@
 - **WHEN** 已毕业代币的 Telegram 消息发送成功
 - **THEN** 系统异步获取 Pool 基线，不等待该请求完成才发送消息
 
-### Requirement: Realtime acceptance gate
-系统 SHALL 记录来源提交、条件满足、Security 完成、Telegram 尝试与成功时间。正式频道启用前 MUST 完成至少 72 小时影子运行，并在有可评估样本时达到：条件满足到 Telegram 成功发送 P95<5 秒，1m 极速信号从首个包含候选的 GMGN 响应到成功发送 P95<10 秒，且连续 24 小时没有冷却期间继续请求造成的失控 429。链上事件到 GMGN 可见的上游时间不计入 Bot 可控延迟。
+### Requirement: Sample-based realtime acceptance gate
+系统 SHALL 记录来源提交、条件满足、Security 完成、Telegram 尝试与成功时间。私人开发频道 SHALL 立即接收按当前项目规则通过的真实信号，不受验收门禁阻断。正式频道批准 SHALL 基于当前配置指纹的样本：至少 100 个有效 T+1h 信号，曲线加速、1m 快榜和跨榜启动各至少 20 个，T+1h 结果覆盖率至少 90%，延迟至少 30 个样本且条件满足到发送 P95<5 秒、1m 快榜从首次来源可见到发送 P95<10 秒。链上事件到 GMGN 可见的上游时间不计入 Bot 可控延迟。
 
-#### Scenario: Shadow acceptance passes
-- **WHEN** 影子运行已满 72 小时、各延迟指标有可评估样本且全部门槛通过
+#### Scenario: Sample acceptance passes
+- **WHEN** 当前配置指纹的总样本、分路径样本、覆盖率与延迟门槛全部通过
 - **THEN** 系统生成可供人工批准正式频道启用的验收报告
 
 #### Scenario: A latency gate fails or lacks samples
 - **WHEN** 任一 P95 超过门槛，或对应指标没有可评估样本
 - **THEN** 正式频道保持禁用，并继续影子运行或修复后重新验证
 
-#### Scenario: Uncontrolled rate limiting occurs
-- **WHEN** 24 小时窗口内系统在持久化冷却期间仍发起 GMGN 请求并导致重复 429
-- **THEN** 正式频道保持禁用并记录限速门禁失败
+#### Scenario: Request stability samples are insufficient
+- **WHEN** 当前配置累计 GMGN 请求少于 10,000，或成功率低于 99%，或出现冷却期间继续请求造成的失控 429，或出现关键 Rank/Trenches Schema 失败
+- **THEN** 正式频道保持禁用，但私人开发频道继续按规则推送和积累样本

@@ -3,7 +3,7 @@ import type { Bot } from "grammy";
 import type { PersistenceRepository } from "../db/index.js";
 import { aggregateStatistics, type SignalStatistics } from "./stats.js";
 
-export type StatsRequest = "today" | "7d" | "30d" | "detail";
+export type StatsRequest = "current" | "today" | "7d" | "30d" | "detail";
 
 function localParts(timestamp: number, timeZone: string): {
   readonly year: number;
@@ -63,6 +63,9 @@ export function resolveStatsRange(
   now: number,
   timeZone: string,
 ): { readonly from: number; readonly to: number; readonly label: string } {
+  if (request === "current" || request === "detail") {
+    return { from: 0, to: now + 1, label: "当前版本累计" };
+  }
   if (request === "7d" || request === "30d") {
     const days = request === "7d" ? 7 : 30;
     return { from: now - days * 86_400_000, to: now + 1, label: `近 ${days} 天` };
@@ -81,7 +84,7 @@ export function resolveStatsRange(
 
 export function parseStatsRequest(argument: string): StatsRequest | null {
   const normalized = argument.trim().toLowerCase();
-  if (normalized === "") return "today";
+  if (normalized === "") return "current";
   if (normalized === "7d" || normalized === "30d" || normalized === "detail") {
     return normalized;
   }
@@ -115,6 +118,12 @@ function sourceLabel(source: string): string {
   }
 }
 
+function reviewStage(value: SignalStatistics["reviewStage"]): string {
+  if (value === "baseline") return "已形成基线";
+  if (value === "first_review") return "可进行首次复盘";
+  return "持续采集中";
+}
+
 export function renderStatisticsCard(
   stats: SignalStatistics,
   label: string,
@@ -127,6 +136,8 @@ export function renderStatisticsCard(
     `已评估 15m：${stats.evaluated15}/${stats.due15}`,
     `已评估 1h：${stats.evaluated1h}/${stats.due1h}`,
     `待满 15m：${stats.pending15}`,
+    `有效 T+1h 样本：${stats.validSamples1h}（${reviewStage(stats.reviewStage)}）`,
+    `下一复盘节点：${stats.nextReviewAt}`,
     "",
     `15m 命中率：${percentage(stats.hitRate15)} (${stats.hit15}/${stats.evaluated15})`,
     `1h 大涨率：${percentage(stats.largeGainRate1h)} (${stats.largeGain1h}/${stats.evaluated1h})`,
@@ -145,6 +156,7 @@ export function renderStatisticsCard(
     `双榜确认率：${percentage(stats.confirmationRate)} (${stats.confirmed}/${stats.signals})`,
     `中位推送延迟：${latency(stats.medianLatencyMs)}`,
     `15m 数据覆盖率：${percentage(stats.coverage15)} (${stats.evaluated15}/${stats.due15})`,
+    `1h 数据覆盖率：${percentage(stats.coverage1h)} (${stats.evaluated1h}/${stats.due1h})`,
   ];
   if (detail) {
     lines.push("", "<b>按信号来源</b>");
@@ -170,6 +182,7 @@ export interface StatsServiceOptions {
   readonly timeZone: string;
   readonly hitGain: number;
   readonly largeGain: number;
+  readonly configVersion: number;
   readonly now?: () => number;
 }
 
@@ -183,10 +196,17 @@ export class StatsService {
   public render(request: StatsRequest): string {
     const now = this.now();
     const range = resolveStatsRange(request, now, this.options.timeZone);
-    const rows = this.options.repository.listStatisticsSignals(range.from, range.to);
+    const stored = this.options.repository.getConfigVersion(this.options.configVersion);
+    if (stored === null) throw new Error("Current statistics config version does not exist");
+    const from = Math.max(range.from, stored.createdAt);
+    const rows = this.options.repository.listStatisticsSignals(
+      from,
+      range.to,
+      this.options.configVersion,
+    );
     return renderStatisticsCard(
       aggregateStatistics(rows, now, this.options.hitGain, this.options.largeGain),
-      range.label,
+      `${range.label} · v${this.options.configVersion}`,
       request === "detail",
     );
   }

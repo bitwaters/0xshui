@@ -6,8 +6,12 @@ import type {
   OutcomeRecord,
   OperationalSignalRow,
   PendingOutcomeJob,
+  PendingResearchOutcomeJob,
   ReplayEvent,
   RecoveredState,
+  ResearchOutcomeRecord,
+  ResearchSampleInput,
+  ResearchSampleRow,
   SecurityEvent,
   SignalState,
   SnapshotEvent,
@@ -130,6 +134,93 @@ export class PersistenceRepository {
     return row === undefined
       ? null
       : { version: row.version, config: JSON.parse(row.configJson) as unknown, createdAt: row.createdAt };
+  }
+
+  public createResearchSample(input: ResearchSampleInput, maximumPerMinute = 5): boolean {
+    if (!Number.isSafeInteger(maximumPerMinute) || maximumPerMinute < 1 || maximumPerMinute > 60) {
+      throw new RangeError("Research sample minute limit must be between 1 and 60");
+    }
+    if (!Number.isFinite(input.baselinePrice) || input.baselinePrice <= 0) {
+      throw new RangeError("Research sample baseline price must be positive");
+    }
+    if (
+      input.outcomeCheckpointsMs.length !== 2 ||
+      new Set(input.outcomeCheckpointsMs).size !== 2 ||
+      input.outcomeCheckpointsMs.some((value) => !Number.isSafeInteger(value) || value <= 0)
+    ) {
+      throw new RangeError("Exactly two unique positive research checkpoints are required");
+    }
+    return this.database.transaction(() => {
+      const existing = this.database
+        .prepare("SELECT 1 FROM research_samples WHERE token_key = ? AND config_version = ?")
+        .get(input.tokenKey, input.configVersion);
+      if (existing !== undefined) return false;
+      const recent = this.database
+        .prepare("SELECT COUNT(*) AS count FROM research_samples WHERE sampled_at > ?")
+        .get(input.sampledAt - 60_000) as { count: number };
+      if (recent.count >= maximumPerMinute) return false;
+      const result = this.database
+        .prepare(`
+          INSERT INTO research_samples (
+            token_key, config_version, sampled_at, lifecycle, baseline_price,
+            feature_json, detector_version, upstream_filter_version, adapter_version, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          input.tokenKey,
+          input.configVersion,
+          input.sampledAt,
+          input.lifecycle,
+          input.baselinePrice,
+          serializeJson(input.feature),
+          input.detectorVersion,
+          input.upstreamFilterVersion,
+          input.adapterVersion,
+          input.sampledAt,
+        );
+      const insertOutcome = this.database.prepare(`
+        INSERT INTO research_outcomes (
+          research_sample_id, checkpoint_ms, due_at, state, attempt_count,
+          next_attempt_at, created_at, updated_at
+        ) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)
+      `);
+      for (const checkpointMs of [...input.outcomeCheckpointsMs].sort((a, b) => a - b)) {
+        const dueAt = input.sampledAt + checkpointMs;
+        insertOutcome.run(result.lastInsertRowid, checkpointMs, dueAt, dueAt, input.sampledAt, input.sampledAt);
+      }
+      return true;
+    })();
+  }
+
+  public listResearchSamples(from: number, to: number): readonly ResearchSampleRow[] {
+    const samples = this.database
+      .prepare(`
+        SELECT id, token_key AS tokenKey, config_version AS originalConfigVersion,
+               sampled_at AS sampledAt, lifecycle, baseline_price AS baselinePrice,
+               feature_json AS featureJson, detector_version AS detectorVersion,
+               upstream_filter_version AS upstreamFilterVersion,
+               adapter_version AS adapterVersion
+        FROM research_samples
+        WHERE sampled_at >= ? AND sampled_at < ?
+        ORDER BY sampled_at, id
+      `)
+      .all(from, to) as Array<Omit<ResearchSampleRow, "feature" | "outcomes"> & { featureJson: string }>;
+    const outcomes = this.database.prepare(`
+      SELECT checkpoint_ms AS checkpointMs, state, result_json AS resultJson
+      FROM research_outcomes WHERE research_sample_id = ? ORDER BY checkpoint_ms
+    `);
+    return samples.map(({ featureJson, ...sample }) => ({
+      ...sample,
+      feature: JSON.parse(featureJson) as unknown,
+      outcomes: (outcomes.all(sample.id) as Array<{
+        checkpointMs: number;
+        state: OutcomeRecord["state"];
+        resultJson: string | null;
+      }>).map(({ resultJson, ...outcome }) => ({
+        ...outcome,
+        result: resultJson === null ? null : (JSON.parse(resultJson) as unknown),
+      })),
+    }));
   }
 
   public listReplayEvents(from: number, to: number): readonly ReplayEvent[] {
@@ -404,6 +495,36 @@ export class PersistenceRepository {
       );
   }
 
+  public saveResearchOutcome(outcome: ResearchOutcomeRecord): void {
+    this.database
+      .prepare(`
+        INSERT INTO research_outcomes (
+          research_sample_id, checkpoint_ms, due_at, state, attempt_count, next_attempt_at,
+          result_json, completed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(research_sample_id, checkpoint_ms) DO UPDATE SET
+          state = excluded.state,
+          attempt_count = excluded.attempt_count,
+          next_attempt_at = excluded.next_attempt_at,
+          result_json = excluded.result_json,
+          completed_at = excluded.completed_at,
+          updated_at = excluded.updated_at
+        WHERE research_outcomes.state = 'pending'
+      `)
+      .run(
+        outcome.researchSampleId,
+        outcome.checkpointMs,
+        outcome.dueAt,
+        outcome.state,
+        outcome.attemptCount,
+        outcome.nextAttemptAt ?? null,
+        outcome.result === undefined ? null : serializeJson(outcome.result),
+        outcome.completedAt ?? null,
+        outcome.now,
+        outcome.now,
+      );
+  }
+
   public listDueOutcomeJobs(now: number, limit = 20): readonly PendingOutcomeJob[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new RangeError("Outcome job limit must be between 1 and 100");
@@ -430,6 +551,30 @@ export class PersistenceRepository {
       ...row,
       poolBaseline: poolBaselineJson === null ? null : (JSON.parse(poolBaselineJson) as unknown),
     }));
+  }
+
+  public listDueResearchOutcomeJobs(
+    now: number,
+    limit = 20,
+  ): readonly PendingResearchOutcomeJob[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new RangeError("Research outcome job limit must be between 1 and 100");
+    }
+    return this.database
+      .prepare(`
+        SELECT o.id AS outcomeId, o.research_sample_id AS researchSampleId,
+               s.token_key AS tokenKey, s.lifecycle, o.checkpoint_ms AS checkpointMs,
+               o.due_at AS dueAt, o.attempt_count AS attemptCount,
+               s.sampled_at AS sampledAt, s.baseline_price AS baselinePrice
+        FROM research_outcomes o
+        JOIN research_samples s ON s.id = o.research_sample_id
+        WHERE o.state = 'pending'
+          AND o.due_at <= ?
+          AND COALESCE(o.next_attempt_at, o.due_at) <= ?
+        ORDER BY o.due_at, o.id
+        LIMIT ?
+      `)
+      .all(now, now, limit) as readonly PendingResearchOutcomeJob[];
   }
 
   public savePoolBaseline(tokenKey: string, pool: unknown, now: number): boolean {
@@ -483,18 +628,23 @@ export class PersistenceRepository {
     }));
   }
 
-  public listStatisticsSignals(from: number, to: number): readonly StatisticsSignalRow[] {
+  public listStatisticsSignals(
+    from: number,
+    to: number,
+    configVersion?: number,
+  ): readonly StatisticsSignalRow[] {
     const signals = this.database
       .prepare(`
-        SELECT id AS signalId, token_key AS tokenKey, lifecycle, state,
+        SELECT id AS signalId, config_version AS configVersion, token_key AS tokenKey, lifecycle, state,
                decision_json AS decisionJson, qualified_at AS qualifiedAt,
                security_completed_at AS securityCompletedAt, sent_at AS sentAt,
                confirmed_at AS confirmedAt
         FROM signals
         WHERE state IN ('sent', 'confirmed') AND sent_at >= ? AND sent_at < ?
+          AND (? IS NULL OR config_version = ?)
         ORDER BY sent_at, id
       `)
-      .all(from, to) as Array<
+      .all(from, to, configVersion ?? null, configVersion ?? null) as Array<
       Omit<StatisticsSignalRow, "decision" | "outcomes"> & { decisionJson: string }
     >;
     const outcomes = this.database.prepare(`
@@ -515,7 +665,7 @@ export class PersistenceRepository {
     }));
   }
 
-  public summarizeSignals(from: number, to: number): SignalStateSummary {
+  public summarizeSignals(from: number, to: number, configVersion?: number): SignalStateSummary {
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) {
       throw new RangeError("Signal summary range must be increasing");
     }
@@ -524,10 +674,15 @@ export class PersistenceRepository {
         SELECT state, reason, COUNT(*) AS count
         FROM signals
         WHERE first_discovered_at >= ? AND first_discovered_at < ?
+          AND (? IS NULL OR config_version = ?)
         GROUP BY state, reason
         ORDER BY state, reason
       `)
-      .all(from, to) as Array<{ state: string; reason: string | null; count: number }>;
+      .all(from, to, configVersion ?? null, configVersion ?? null) as Array<{
+      state: string;
+      reason: string | null;
+      count: number;
+    }>;
     const stateCounts: Record<string, number> = {};
     const reasonCounts: Record<string, number> = {};
     let candidates = 0;
@@ -539,13 +694,18 @@ export class PersistenceRepository {
     return { candidates, stateCounts, reasonCounts };
   }
 
-  public listOperationalSignals(from: number, to: number): readonly OperationalSignalRow[] {
+  public listOperationalSignals(
+    from: number,
+    to: number,
+    configVersion?: number,
+  ): readonly OperationalSignalRow[] {
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from) {
       throw new RangeError("Operational metrics range must be increasing");
     }
     const rows = this.database
       .prepare(`
-        SELECT s.token_key AS tokenKey, s.lifecycle, s.state, s.reason,
+        SELECT s.token_key AS tokenKey, s.config_version AS configVersion,
+               s.lifecycle, s.state, s.reason,
                s.decision_json AS decisionJson,
                MIN(t.source_captured_at) AS sourceCapturedAt,
                s.first_discovered_at AS firstDiscoveredAt,
@@ -558,20 +718,35 @@ export class PersistenceRepository {
           AND t.captured_at <= COALESCE(s.sent_at, s.updated_at)
           AND t.source_captured_at >= s.first_discovered_at
         WHERE s.first_discovered_at >= ? AND s.first_discovered_at < ?
+          AND (? IS NULL OR s.config_version = ?)
         GROUP BY s.id
         ORDER BY s.first_discovered_at, s.id
       `)
-      .all(from, to) as Array<Omit<OperationalSignalRow, "decision"> & { decisionJson: string }>;
+      .all(from, to, configVersion ?? null, configVersion ?? null) as Array<
+      Omit<OperationalSignalRow, "decision"> & { decisionJson: string }
+    >;
     return rows.map(({ decisionJson, ...row }) => ({
       ...row,
       decision: JSON.parse(decisionJson) as unknown,
     }));
   }
 
-  public countPendingOutcomes(): number {
+  public countPendingOutcomes(configVersion?: number): number {
     return (
       this.database
-        .prepare("SELECT COUNT(*) AS count FROM signal_outcomes WHERE state = 'pending'")
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM signal_outcomes o JOIN signals s ON s.id = o.signal_id
+          WHERE o.state = 'pending' AND (? IS NULL OR s.config_version = ?)
+        `)
+        .get(configVersion ?? null, configVersion ?? null) as { count: number }
+    ).count;
+  }
+
+  public countPendingResearchOutcomes(): number {
+    return (
+      this.database
+        .prepare("SELECT COUNT(*) AS count FROM research_outcomes WHERE state = 'pending'")
         .get() as { count: number }
     ).count;
   }
@@ -599,12 +774,20 @@ export class PersistenceRepository {
   }
 
   public incrementRuntimeCounter(key: string, now = Date.now()): number {
+    return this.addRuntimeCounter(key, 1, now);
+  }
+
+  public addRuntimeCounter(key: string, amount: number, now = Date.now()): number {
+    if (!Number.isSafeInteger(amount) || amount < 0) {
+      throw new RangeError("Runtime counter increment must be a non-negative integer");
+    }
     return this.database.transaction(() => {
       const current = this.getRuntimeState<unknown>(key) ?? 0;
       if (typeof current !== "number" || !Number.isSafeInteger(current) || current < 0) {
         throw new Error(`Invalid runtime counter ${key}`);
       }
-      const next = current + 1;
+      const next = current + amount;
+      if (!Number.isSafeInteger(next)) throw new Error(`Runtime counter ${key} overflowed`);
       this.setRuntimeState(key, next, now);
       return next;
     })();

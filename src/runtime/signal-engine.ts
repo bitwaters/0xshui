@@ -7,6 +7,8 @@ import type {
 import {
   DETECTOR_VERSION,
   evaluateDetector,
+  passesResearchSafety,
+  shouldPreheatSecurity,
   type CandidateReference,
   type DetectorDecision,
   type DetectorInput,
@@ -18,6 +20,7 @@ import type { RankToken, SecuritySnapshot, TrenchesToken } from "../gmgn/index.j
 import type { AppLogger } from "../logging/index.js";
 import type { HealthMonitor } from "../operations/index.js";
 import type { TokenWindowStore } from "../realtime/index.js";
+import { buildResearchSample } from "../replay/index.js";
 import type {
   FreshSignalCheck,
   SignalCardModel,
@@ -129,6 +132,7 @@ export class SignalEngine {
     if (input === null) return;
     const result = evaluateDetector(input);
     this.persist(input, result, now);
+    this.persistResearch(input, now);
     const state = this.states.get(tokenKey);
     if (state === undefined) return;
     state.state = result.nextState;
@@ -301,6 +305,30 @@ export class SignalEngine {
       this.options.health.markFailed("storage", now);
       this.options.logger.error("storage_failed", error, { phase: "candidate_persist" });
       throw error;
+    }
+  }
+
+  private persistResearch(input: DetectorInput, now: number): void {
+    if (!shouldPreheatSecurity(input) || !passesResearchSafety(input)) return;
+    const sample = buildResearchSample(input);
+    if (sample === null) return;
+    try {
+      const created = this.options.repository.createResearchSample({
+        tokenKey: input.tokenKey,
+        configVersion: input.configVersion,
+        sampledAt: now,
+        lifecycle: sample.lifecycle,
+        baselinePrice: sample.baselinePrice,
+        feature: sample.feature,
+        detectorVersion: DETECTOR_VERSION,
+        upstreamFilterVersion: "gmgn-safe-v1",
+        adapterVersion: "gmgn-adapter-v1",
+        outcomeCheckpointsMs: this.options.config.outcomes.checkpoints,
+      });
+      if (created) this.options.logger.info("research_sample_created");
+    } catch (error) {
+      this.options.health.markFailed("storage", now);
+      this.options.logger.error("storage_failed", error, { phase: "research_sample" });
     }
   }
 

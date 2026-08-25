@@ -136,4 +136,50 @@ export const MIGRATIONS: readonly Migration[] = [
       ADD COLUMN telegram_attempted_at INTEGER;
     `,
   },
+  {
+    version: 4,
+    name: "research_samples",
+    sql: `
+      CREATE TABLE research_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_key TEXT NOT NULL,
+        config_version INTEGER NOT NULL REFERENCES config_versions(version),
+        sampled_at INTEGER NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('curve', 'graduated')),
+        baseline_price REAL NOT NULL CHECK (baseline_price > 0),
+        feature_json TEXT NOT NULL CHECK (json_valid(feature_json)),
+        detector_version TEXT NOT NULL,
+        upstream_filter_version TEXT NOT NULL,
+        adapter_version TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (token_key, config_version)
+      ) STRICT;
+
+      CREATE INDEX idx_research_samples_config_time
+        ON research_samples (config_version, sampled_at, id);
+      CREATE INDEX idx_research_samples_retention
+        ON research_samples (sampled_at, id);
+
+      CREATE TABLE research_outcomes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        research_sample_id INTEGER NOT NULL REFERENCES research_samples(id) ON DELETE CASCADE,
+        checkpoint_ms INTEGER NOT NULL CHECK (checkpoint_ms > 0),
+        due_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'pending', 'completed', 'no_trade', 'pool_removed', 'api_missing',
+          'retry_exhausted'
+        )),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
+        next_attempt_at INTEGER,
+        result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+        completed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (research_sample_id, checkpoint_ms)
+      ) STRICT;
+
+      CREATE INDEX idx_research_outcomes_pending
+        ON research_outcomes (state, next_attempt_at, due_at);
+    `,
+  },
 ] as const;

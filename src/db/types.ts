@@ -81,8 +81,64 @@ export interface PendingOutcomeJob {
   readonly poolBaseline: unknown | null;
 }
 
+export interface ResearchSampleInput {
+  readonly tokenKey: string;
+  readonly configVersion: number;
+  readonly sampledAt: number;
+  readonly lifecycle: SignalLifecycle;
+  readonly baselinePrice: number;
+  readonly feature: unknown;
+  readonly detectorVersion: string;
+  readonly upstreamFilterVersion: string;
+  readonly adapterVersion: string;
+  readonly outcomeCheckpointsMs: readonly number[];
+}
+
+export interface PendingResearchOutcomeJob {
+  readonly outcomeId: number;
+  readonly researchSampleId: number;
+  readonly tokenKey: string;
+  readonly lifecycle: SignalLifecycle;
+  readonly checkpointMs: number;
+  readonly dueAt: number;
+  readonly attemptCount: number;
+  readonly sampledAt: number;
+  readonly baselinePrice: number;
+}
+
+export interface ResearchOutcomeRecord {
+  readonly researchSampleId: number;
+  readonly checkpointMs: number;
+  readonly dueAt: number;
+  readonly state: OutcomeState;
+  readonly attemptCount: number;
+  readonly nextAttemptAt?: number;
+  readonly result?: unknown;
+  readonly completedAt?: number;
+  readonly now: number;
+}
+
+export interface ResearchSampleRow {
+  readonly id: number;
+  readonly tokenKey: string;
+  readonly originalConfigVersion: number;
+  readonly sampledAt: number;
+  readonly lifecycle: SignalLifecycle;
+  readonly baselinePrice: number;
+  readonly feature: unknown;
+  readonly detectorVersion: string;
+  readonly upstreamFilterVersion: string;
+  readonly adapterVersion: string;
+  readonly outcomes: ReadonlyArray<{
+    readonly checkpointMs: number;
+    readonly state: OutcomeState;
+    readonly result: unknown | null;
+  }>;
+}
+
 export interface StatisticsSignalRow {
   readonly signalId: number;
+  readonly configVersion: number;
   readonly tokenKey: string;
   readonly lifecycle: SignalLifecycle;
   readonly state: "sent" | "confirmed";
@@ -137,6 +193,7 @@ export interface SignalStateSummary {
 
 export interface OperationalSignalRow {
   readonly tokenKey: string;
+  readonly configVersion: number;
   readonly lifecycle: SignalLifecycle;
   readonly state: SignalState;
   readonly reason: string | null;

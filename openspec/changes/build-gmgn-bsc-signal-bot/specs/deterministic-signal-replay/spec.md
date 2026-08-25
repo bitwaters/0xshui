@@ -29,6 +29,17 @@
 - **WHEN** 使用新的配置版本回放同一历史事件集
 - **THEN** 系统只改变参数允许影响的检测结果，不重新请求或混入未来 GMGN 数据
 
+### Requirement: Bounded compact research cohort
+系统 SHALL 为 Security 已通过的预热候选保存紧凑研究样本，每个 token/config 最多一份，全局每 60 秒最多 5 份。样本 SHALL 包含当时的最近市场窗口、Security、首次发现基线、价格、Detector/Adapter/上游过滤版本，并以低优先级采集 T+15m/T+1h 结果。研究样本 MUST NOT 发送 Telegram 或计入实际推送统计。
+
+#### Scenario: Preheated candidate passes Security
+- **WHEN** 候选具备有效基准价格、通过 Security 且当前 60 秒研究样本不足 5 个
+- **THEN** 系统原子创建一份研究样本和两个低优先级结果作业，但不产生 TG 信号
+
+#### Scenario: Research replay selects a hypothetical signal
+- **WHEN** 指定新配置回算紧凑研究样本
+- **THEN** 系统使用存储的当时输入与已存结果计算研究质量，不请求 GMGN，并披露样本上限和不包含完整跨 token 限频语义
+
 ### Requirement: Replay scope disclosure
 每份回算结果 SHALL 标注 `upstream_filter_version`、`adapter_version` 和 `sampling_level`，并说明结果只覆盖已保存的 GMGN 上游过滤后候选；普通榜单历史精度为 5 秒，无法评估被上游过滤掉的代币或更宽松的上游安全条件。
 

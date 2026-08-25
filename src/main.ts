@@ -64,8 +64,23 @@ async function run(): Promise<void> {
   try {
     const context = bootstrapApplication();
     database = context.database;
+    const acceptanceKey = acceptanceConfigKey(context.config);
     const health = new HealthMonitor(context.config.telegram.enabled);
     const gmgnRequestMetrics = new GmgnRequestMetrics();
+    const persistRequestMetrics = (now: number) => {
+      const snapshot = gmgnRequestMetrics.snapshot(true);
+      context.repository.addRuntimeCounter(
+        `gmgn_request_attempts:${acceptanceKey}`,
+        snapshot.attempts,
+        now,
+      );
+      context.repository.addRuntimeCounter(
+        `gmgn_request_successes:${acceptanceKey}`,
+        snapshot.successes,
+        now,
+      );
+      return snapshot;
+    };
     health.markHealthy("storage", Date.now());
     const activeLimiter = new WeightedRateLimiter({
       ratePerSecond: context.config.gmgn.local_weight_limit_per_second,
@@ -86,9 +101,11 @@ async function run(): Promise<void> {
         const priorCooldown = activeLimiter.getCooldownUntil();
         if (priorCooldown !== null && priorCooldown > Date.now()) {
           context.repository.setRuntimeState("last_uncontrolled_429_at", Date.now());
+          context.repository.incrementRuntimeCounter(`uncontrolled_429_count:${acceptanceKey}`);
         }
         await activeLimiter.onRateLimit(error);
         context.repository.incrementRuntimeCounter("rate_limit_count");
+        context.repository.incrementRuntimeCounter(`rate_limit_count:${acceptanceKey}`);
         context.logger.warn("rate_limit_paused", { cooldown_until: error.cooldownUntil });
       },
     });
@@ -96,6 +113,8 @@ async function run(): Promise<void> {
     if (!selfCheck.ok) {
       context.repository.incrementRuntimeCounter("schema_failure_count");
       context.repository.setRuntimeState("last_schema_failure_at", Date.now());
+      context.repository.incrementRuntimeCounter(`schema_failure_count:${acceptanceKey}`);
+      context.repository.setRuntimeState(`last_schema_failure_at:${acceptanceKey}`, Date.now());
       context.logger.error("schema_contract_failed", new Error("GMGN startup self-check failed"), {
         reason: selfCheck.reason,
         clock_drift_ms: selfCheck.clockDriftMs,
@@ -113,11 +132,13 @@ async function run(): Promise<void> {
       timeZone: context.config.report_timezone,
       hitGain: context.config.outcomes.hit_gain,
       largeGain: context.config.outcomes.large_gain,
+      configVersion: context.configVersion,
     });
     const metrics = new MetricsService(context.repository);
     const acceptance = new AcceptanceService(
       context.repository,
-      acceptanceConfigKey(context.config),
+      acceptanceKey,
+      context.configVersion,
     );
     if (context.config.mode === "shadow") acceptance.ensureShadowStarted(Date.now());
     if (
@@ -227,6 +248,11 @@ async function run(): Promise<void> {
             if (error instanceof GmgnContractError || !(error instanceof GmgnError)) {
               context.repository.incrementRuntimeCounter("schema_failure_count");
               context.repository.setRuntimeState("last_schema_failure_at", Date.now());
+              context.repository.incrementRuntimeCounter(`schema_failure_count:${acceptanceKey}`);
+              context.repository.setRuntimeState(
+                `last_schema_failure_at:${acceptanceKey}`,
+                Date.now(),
+              );
               context.logger.error("schema_contract_failed", error, { source });
             }
           }
@@ -245,12 +271,14 @@ async function run(): Promise<void> {
       setInterval(() => {
         const now = Date.now();
         if (context.config.mode === "shadow") acceptance.recordHeartbeat(now);
+        const requestSnapshot = persistRequestMetrics(now);
         context.logger.info("stats_generated", {
           health: health.snapshot(now),
-          metrics: metrics.collect(Math.max(0, now - 24 * 60 * 60_000), now + 1),
-          gmgn_requests: gmgnRequestMetrics.snapshot(true),
+          metrics: metrics.collect(0, now + 1, context.configVersion),
+          gmgn_requests: requestSnapshot,
           security_queue_length: securityManager.getQueueSize(),
           security_active: securityManager.getActiveCount(),
+          research_outcome_queue_length: context.repository.countPendingResearchOutcomes(),
         });
         if (context.config.telegram.daily_report && context.credentials.telegram !== null && bot !== undefined) {
           const activeBot = bot;
@@ -296,6 +324,7 @@ async function run(): Promise<void> {
     bot = undefined;
     activeLimiter.stop();
     await scheduler.stop();
+    persistRequestMetrics(Date.now());
     health.stop();
     context.logger.info("app_stopped", {
       reason: "signal",

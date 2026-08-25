@@ -21,7 +21,6 @@ import { TelegramPublisher, type TelegramGateway } from "../src/telegram/index.j
 const NOW = 1_787_614_000_000;
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const CREATOR = "0x2222222222222222222222222222222222222222";
-const FIFTEEN = 15 * 60_000;
 
 function rank(rankValue: number, capturedAt: number): { token: RankToken; capturedAt: number } {
   return {
@@ -139,6 +138,8 @@ test("runtime engine reaches sent and confirms by editing the original message",
     await engine.processToken(TOKEN, NOW);
     assert.equal(repository.getDeliveryTarget(TOKEN)?.state, "sent");
     assert.equal(repository.countPendingOutcomes(), 2);
+    assert.equal(repository.countPendingResearchOutcomes(), 2);
+    assert.equal(repository.listResearchSamples(0, NOW + 1).length, 1);
     const attempted = database
       .prepare("SELECT telegram_attempted_at AS value FROM signals WHERE token_key = ?")
       .get(TOKEN) as { value: number };
@@ -200,16 +201,20 @@ test("health readiness fails closed for each required dependency", () => {
   assert.equal(health.snapshot(NOW + 11_000).alive, false);
 });
 
-test("shadow acceptance requires a continuous heartbeat and does not start from a report", () => {
+test("acceptance reports sample progress without treating elapsed time as a gate", () => {
   const database = openDatabase({ path: ":memory:" });
   try {
     const repository = new PersistenceRepository(database);
-    const configKey = acceptanceConfigKey(loadAppConfig());
-    const service = new AcceptanceService(repository, configKey);
+    const config = loadAppConfig();
+    const configKey = acceptanceConfigKey(config);
+    const configVersion = repository.registerConfigVersion(config, NOW);
+    const service = new AcceptanceService(repository, configKey, configVersion);
 
     const initialReport = service.report(NOW);
     assert.equal(initialReport.shadowStartedAt, NOW);
-    assert.equal(initialReport.gates.shadowHeartbeatFresh, false);
+    assert.equal(initialReport.validSamples, 0);
+    assert.equal(initialReport.gates.validSamples100, false);
+    assert.equal(initialReport.eligibleForManualApproval, false);
     assert.equal(repository.getRuntimeState(`shadow_started_at:${configKey}`), null);
 
     assert.equal(service.ensureShadowStarted(NOW), NOW);
@@ -243,58 +248,78 @@ test("acceptance fingerprint ignores deployment mode but changes with signal par
   );
 });
 
-test("acceptance gates require a matching fingerprint-bound manual approval", () => {
-
+test("acceptance requires sample, path, coverage, latency, and API quality gates", () => {
   const database = openDatabase({ path: ":memory:" });
   try {
     const repository = new PersistenceRepository(database);
-    const configVersion = repository.registerConfigVersion(loadAppConfig(), NOW - 80 * 60 * 60_000);
+    const config = loadAppConfig();
+    const configVersion = repository.registerConfigVersion(config, NOW - 3 * 60 * 60_000);
+    const configKey = acceptanceConfigKey(config);
     const sentAt = NOW - 2 * 60 * 60_000;
-    const configKey = acceptanceConfigKey(loadAppConfig());
-    repository.setRuntimeState(`shadow_started_at:${configKey}`, NOW - 73 * 60 * 60_000);
-    repository.setRuntimeState(`shadow_last_heartbeat:${configKey}`, NOW);
-    repository.appendSourceBatch("rank_1m", [
-      {
-        tokenKey: TOKEN,
-        eventType: "enter",
-        capturedAt: sentAt - 8_000,
-        sourceCapturedAt: sentAt - 8_000,
-        samplingLevel: "high",
-        payload: rank(5, sentAt - 8_000).token,
-        upstreamFilterVersion: "test",
-        adapterVersion: "test",
-      },
-    ]);
-    repository.upsertCandidateDecision({
-      tokenKey: TOKEN,
-      lifecycle: "graduated",
-      state: "qualified",
-      priority: "high",
-      configVersion,
-      decision: { evidence: { trigger: "fast_rank" } },
-      firstDiscoveredAt: sentAt - 8_000,
-      qualifiedAt: sentAt - 4_000,
-      securityCompletedAt: sentAt - 1_000,
-      now: sentAt - 4_000,
-    });
-    repository.tryMarkDeliveryPending(TOKEN, sentAt - 100);
-    repository.markSent(TOKEN, 99, sentAt, 1, 100_000);
-    const signalId = (database.prepare("SELECT id FROM signals WHERE token_key = ?").get(TOKEN) as { id: number }).id;
-    repository.saveOutcome({
-      signalId,
-      checkpointMs: FIFTEEN,
-      dueAt: sentAt + FIFTEEN,
-      state: "completed",
-      attemptCount: 1,
-      result: { return15m: 0.4, mfe: 0.5, mae: -0.1 },
-      completedAt: sentAt + FIFTEEN,
-      now: sentAt + FIFTEEN,
-    });
-    const metrics = new MetricsService(repository).collect(NOW - 73 * 60 * 60_000, NOW + 1);
+    const triggers = Array.from({ length: 100 }, (_, index) =>
+      index < 34 ? "curve_acceleration" : index < 67 ? "fast_rank" : "cross_source",
+    );
+    repository.appendSourceBatch(
+      "rank_1m",
+      triggers.map((_trigger, index) => {
+        const tokenKey = `0x${(index + 1).toString(16).padStart(40, "0")}`;
+        return {
+          tokenKey,
+          eventType: "enter" as const,
+          capturedAt: sentAt - 8_000,
+          sourceCapturedAt: sentAt - 8_000,
+          samplingLevel: "high" as const,
+          payload: { ...rank(5, sentAt - 8_000).token, tokenKey, address: tokenKey },
+          upstreamFilterVersion: "test",
+          adapterVersion: "test",
+        };
+      }),
+    );
+    for (const [index, trigger] of triggers.entries()) {
+      const tokenKey = `0x${(index + 1).toString(16).padStart(40, "0")}`;
+      repository.upsertCandidateDecision({
+        tokenKey,
+        lifecycle: trigger === "curve_acceleration" ? "curve" : "graduated",
+        state: "qualified",
+        priority: "high",
+        configVersion,
+        decision: { evidence: { trigger } },
+        firstDiscoveredAt: sentAt - 8_000,
+        qualifiedAt: sentAt - 4_000,
+        securityCompletedAt: sentAt - 1_000,
+        now: sentAt - 4_000,
+      });
+      repository.tryMarkDeliveryPending(tokenKey, sentAt - 100);
+      repository.markSent(tokenKey, 100 + index, sentAt, 1, 100_000);
+      const signalId = (
+        database.prepare("SELECT id FROM signals WHERE token_key = ?").get(tokenKey) as {
+          id: number;
+        }
+      ).id;
+      repository.saveOutcome({
+        signalId,
+        checkpointMs: 60 * 60_000,
+        dueAt: sentAt + 60 * 60_000,
+        state: "completed",
+        attemptCount: 1,
+        result: { return1h: 0.2, mfe: 0.4, mae: -0.1 },
+        completedAt: sentAt + 60 * 60_000,
+        now: sentAt + 60 * 60_000,
+      });
+    }
+    repository.addRuntimeCounter(`gmgn_request_attempts:${configKey}`, 10_000, NOW);
+    repository.addRuntimeCounter(`gmgn_request_successes:${configKey}`, 9_900, NOW);
+    const metrics = new MetricsService(repository).collect(0, NOW + 1, configVersion);
     assert.equal(metrics.qualifiedToSent.p95, 4_000);
     assert.equal(metrics.fastSourceToSent.p95, 8_000);
-    assert.equal(metrics.outcomeCoverage15, 1);
-    const service = new AcceptanceService(repository, configKey);
+    assert.equal(metrics.outcomeCoverage1h, 1);
+    const service = new AcceptanceService(repository, configKey, configVersion);
+    assert.equal(service.report(NOW).validSamples, 100);
+    assert.deepEqual(service.report(NOW).triggerSamples, {
+      cross_source: 33,
+      curve_acceleration: 34,
+      fast_rank: 33,
+    });
     assert.equal(service.report(NOW).eligibleForManualApproval, true);
     assert.equal(service.report(NOW).productionActivation, "blocked");
     assert.equal(service.approve(NOW).productionActivation, "approved");

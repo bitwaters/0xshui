@@ -76,5 +76,7 @@
 - [x] 9.2 Add automated acceptance checks proving production code contains no gmgn-cli subprocess use, deep gmgn-cli imports, private-key reads, X-Signature generation, or automatic retry after ambiguous Telegram delivery
 - [x] 9.3 Persist source-captured, qualified, Security-completed, Telegram-attempted, and Telegram-sent timestamps and export the required P50/P95, queue, cooldown, signal, rejection, and coverage metrics
 - [x] 9.4 Run the complete unit, contract, integration, typecheck, lint, migration, restart, and deterministic replay suites on a clean workspace
-- [ ] 9.5 Deploy to a private shadow channel for at least 72 hours and record actual return counts, Schema stability, 429 behavior, noise, quality, coverage, and latency
-- [ ] 9.6 Verify the 24-hour stability and P95 acceptance gates with non-empty samples, document any threshold-only tuning as a new config_version, and explicitly approve or reject production-channel activation
+- [x] 9.5 Replace duration-based acceptance with config-version-scoped gates for 100 valid T+1h samples, 20 samples per trigger path, 90% coverage, 30 latency samples, 10,000 GMGN requests at 99% success, and zero uncontrolled 429 or critical Schema failures
+- [x] 9.6 Make private Shadow Telegram delivery immediate under the production detector rules and make `/stats` show cumulative current-config sample progress at 30, 100, and each additional 50 valid samples
+- [x] 9.7 Persist at most five compact Security-passed preheat research samples per minute with low-priority 15m/1h outcomes, keep them separate from real signals, and include their bounded quality in deterministic replay
+- [ ] 9.8 Run full validation and review, deploy through GitHub pull and Docker Compose, and verify real private-channel delivery readiness plus request/schema/rate-limit health without a duration gate

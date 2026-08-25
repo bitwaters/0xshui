@@ -51,6 +51,9 @@ export interface ReplayReport {
   readonly decisions: readonly ReplayDecision[];
   readonly replaySelectedQuality: ReplayQualitySummary;
   readonly actualQuality: ReplayQualitySummary;
+  readonly researchSampleCount: number;
+  readonly researchSelectedCount: number;
+  readonly researchSelectedQuality: ReplayQualitySummary;
   readonly scopeLimitations: readonly string[];
 }
 

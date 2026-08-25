@@ -492,6 +492,22 @@ function sourceRiskFields(input: DetectorInput): {
   };
 }
 
+export function passesResearchSafety(input: DetectorInput): boolean {
+  if (input.security === undefined) return false;
+  const { trench } = currentSources(input);
+  const sourceFields = sourceRiskFields(input);
+  const lifecycle = trench !== undefined && trench.stage !== "completed" ? "curve" : "graduated";
+  return evaluateSafety({
+    lifecycle,
+    security: input.security.value,
+    sources: sourceFields.risks,
+    ...(sourceFields.curveSource === undefined ? {} : { curveSource: sourceFields.curveSource }),
+    sourceSecurity: sourceFields.sourceSecurity,
+    hasSafeTrenches: sourceFields.hasSafeTrenches,
+    config: input.config.risk_filters,
+  }).status === "pass";
+}
+
 function decision(
   input: DetectorInput,
   action: DetectorDecision["action"],

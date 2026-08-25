@@ -1,4 +1,8 @@
-import type { PersistenceRepository, PendingOutcomeJob } from "../db/index.js";
+import type {
+  PendingOutcomeJob,
+  PendingResearchOutcomeJob,
+  PersistenceRepository,
+} from "../db/index.js";
 import type { PoolSnapshot, TrenchesToken } from "../gmgn/index.js";
 import { calculateOutcome, fixedTerminalOutcome } from "./calculator.js";
 import type {
@@ -11,6 +15,21 @@ import type {
 const GRACE_MS = 10 * 60_000;
 const RETRY_MS = 3 * 60_000;
 const FRESH_TRENCHES_MS = 10_000;
+
+type WorkerJob =
+  | (PendingOutcomeJob & { readonly kind: "signal" })
+  | {
+      readonly kind: "research";
+      readonly researchSampleId: number;
+      readonly tokenKey: string;
+      readonly lifecycle: "curve" | "graduated";
+      readonly checkpointMs: number;
+      readonly dueAt: number;
+      readonly attemptCount: number;
+      readonly sentAt: number;
+      readonly sentPrice: number;
+      readonly poolBaseline: null;
+    };
 
 function isPoolSnapshot(value: unknown): value is PoolSnapshot {
   return (
@@ -149,7 +168,17 @@ export class OutcomeWorker {
     }
     this.running = true;
     try {
-      const jobs = this.options.repository.listDueOutcomeJobs(this.now(), limit);
+      const signalJobs = this.options.repository
+        .listDueOutcomeJobs(this.now(), limit)
+        .map((job): WorkerJob => ({ ...job, kind: "signal" }));
+      const remaining = limit - signalJobs.length;
+      const researchJobs =
+        remaining <= 0
+          ? []
+          : this.options.repository
+              .listDueResearchOutcomeJobs(this.now(), remaining)
+              .map((job): WorkerJob => this.researchJob(job));
+      const jobs = [...signalJobs, ...researchJobs];
       for (const job of jobs) {
         await this.runJob(job);
       }
@@ -159,7 +188,22 @@ export class OutcomeWorker {
     }
   }
 
-  private async runJob(job: PendingOutcomeJob): Promise<void> {
+  private researchJob(job: PendingResearchOutcomeJob): WorkerJob {
+    return {
+      kind: "research",
+      researchSampleId: job.researchSampleId,
+      tokenKey: job.tokenKey,
+      lifecycle: job.lifecycle,
+      checkpointMs: job.checkpointMs,
+      dueAt: job.dueAt,
+      attemptCount: job.attemptCount,
+      sentAt: job.sampledAt,
+      sentPrice: job.baselinePrice,
+      poolBaseline: null,
+    };
+  }
+
+  private async runJob(job: WorkerJob): Promise<void> {
     const now = this.now();
     const attempt = job.attemptCount + 1;
     if (job.sentPrice === null || !Number.isFinite(job.sentPrice) || job.sentPrice <= 0) {
@@ -272,7 +316,7 @@ export class OutcomeWorker {
   }
 
   private retryOrComplete(
-    job: PendingOutcomeJob,
+    job: WorkerJob,
     attempt: number,
     terminalState: "api_missing" | "retry_exhausted",
     reason: string,
@@ -280,10 +324,7 @@ export class OutcomeWorker {
   ): void {
     const graceUntil = job.dueAt + GRACE_MS;
     if (attempt < 3 && now < graceUntil) {
-      this.options.repository.saveOutcome({
-        signalId: job.signalId,
-        checkpointMs: job.checkpointMs,
-        dueAt: job.dueAt,
+      this.save(job, {
         state: "pending",
         attemptCount: attempt,
         nextAttemptAt: Math.min(now + RETRY_MS, graceUntil),
@@ -296,21 +337,49 @@ export class OutcomeWorker {
   }
 
   private complete(
-    job: PendingOutcomeJob,
+    job: WorkerJob,
     state: "completed" | "no_trade" | "pool_removed" | "api_missing" | "retry_exhausted",
     attemptCount: number,
     result: unknown,
     now: number,
   ): void {
-    this.options.repository.saveOutcome({
-      signalId: job.signalId,
-      checkpointMs: job.checkpointMs,
-      dueAt: job.dueAt,
+    this.save(job, {
       state,
       attemptCount: Math.min(attemptCount, 3),
       result,
       completedAt: now,
       now,
     });
+  }
+
+  private save(
+    job: WorkerJob,
+    value: {
+      readonly state: "pending" | "completed" | "no_trade" | "pool_removed" | "api_missing" | "retry_exhausted";
+      readonly attemptCount: number;
+      readonly nextAttemptAt?: number;
+      readonly result: unknown;
+      readonly completedAt?: number;
+      readonly now: number;
+    },
+  ): void {
+    const common = {
+      checkpointMs: job.checkpointMs,
+      dueAt: job.dueAt,
+      state: value.state,
+      attemptCount: value.attemptCount,
+      ...(value.nextAttemptAt === undefined ? {} : { nextAttemptAt: value.nextAttemptAt }),
+      result: value.result,
+      ...(value.completedAt === undefined ? {} : { completedAt: value.completedAt }),
+      now: value.now,
+    };
+    if (job.kind === "signal") {
+      this.options.repository.saveOutcome({ signalId: job.signalId, ...common });
+    } else {
+      this.options.repository.saveResearchOutcome({
+        researchSampleId: job.researchSampleId,
+        ...common,
+      });
+    }
   }
 }

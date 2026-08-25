@@ -56,11 +56,11 @@
 - **THEN** 系统在最多 3 次总尝试内按退避策略安全重试
 
 ### Requirement: Statistics commands and daily report
-系统 SHALL 支持 `/stats`、`/stats 7d`、`/stats 30d` 和 `/stats detail`，并按配置报告时区每天最多发送一次统计。样本未完成评估时 SHALL 显示待评估数量和数据覆盖率，不得把它们计为失败。
+系统 SHALL 支持 `/stats`、`/stats 7d`、`/stats 30d` 和 `/stats detail`，并按配置报告时区每天最多发送一次统计。`/stats` 和 `/stats detail` SHALL 默认展示当前 `config_version` 从创建以来的累计结果；7d/30d 也 MUST 限定到当前版本。样本未完成评估时 SHALL 显示待评估数量、数据覆盖率、有效 T+1h 样本和下一复盘节点，不得把未知结果计为失败。
 
 #### Scenario: User requests default statistics
 - **WHEN** 用户发送 `/stats`
-- **THEN** 系统返回今日推送量、完成和待评估数量、15m/1h 命中指标、中位涨幅与回撤、曲线毕业率、双榜确认、延迟和覆盖率
+- **THEN** 系统返回当前配置版本的累计推送量、完成和待评估数量、15m/1h 命中指标、中位涨幅与回撤、曲线毕业率、双榜确认、延迟、覆盖率和样本进度
 
 #### Scenario: No signals have completed evaluation
 - **WHEN** 日报时间到但当天没有已完成观察周期的样本
