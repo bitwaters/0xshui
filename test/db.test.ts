@@ -220,6 +220,45 @@ test("candidate updates are parameterized and delivery state is single-winner", 
   });
 });
 
+test("later observations preserve the latest non-empty candidate reason", () => {
+  withDatabase(({ database, repository }) => {
+    const configVersion = repository.registerConfigVersion({ reason: true }, NOW);
+    const tokenKey = "0x1111111111111111111111111111111111111111";
+    assert.equal(
+      repository.upsertCandidateDecision({
+        tokenKey,
+        lifecycle: "graduated",
+        state: "cancelled",
+        reason: "telegram_delay_cancelled:pool_liquidity_unavailable",
+        priority: "normal",
+        configVersion,
+        decision: { action: "cancelled" },
+        firstDiscoveredAt: NOW - 1_000,
+        now: NOW,
+      }),
+      true,
+    );
+    assert.equal(
+      repository.upsertCandidateDecision({
+        tokenKey,
+        lifecycle: "graduated",
+        state: "cancelled",
+        priority: "normal",
+        configVersion,
+        decision: { action: "observe" },
+        firstDiscoveredAt: NOW - 1_000,
+        now: NOW + 1,
+      }),
+      true,
+    );
+
+    const row = database
+      .prepare("SELECT reason FROM signals WHERE token_key = ?")
+      .get(tokenKey) as { reason: string | null };
+    assert.equal(row.reason, "telegram_delay_cancelled:pool_liquidity_unavailable");
+  });
+});
+
 test("research sampling is atomic, deduplicated, and capped at five per rolling minute", () => {
   withDatabase(({ database, repository }) => {
     const configVersion = repository.registerConfigVersion({ research: true }, NOW);

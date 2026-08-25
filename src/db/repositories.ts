@@ -303,7 +303,7 @@ export class PersistenceRepository {
           creator_address = COALESCE(excluded.creator_address, signals.creator_address),
           lifecycle = excluded.lifecycle,
           state = excluded.state,
-          reason = excluded.reason,
+          reason = COALESCE(excluded.reason, signals.reason),
           priority = excluded.priority,
           config_version = excluded.config_version,
           decision_json = excluded.decision_json,

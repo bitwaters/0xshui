@@ -234,6 +234,12 @@ export class SignalEngine {
           this.options.health.markDegraded("telegram", this.now());
         } else {
           this.removeRecent(reservation);
+          if (published.status === "cancelled") {
+            this.options.logger.info("candidate_cancelled", {
+              token_key: tokenKey,
+              reason: published.reason,
+            });
+          }
         }
       }
     } else if (result.action === "confirmed" && this.options.publisher !== undefined) {
