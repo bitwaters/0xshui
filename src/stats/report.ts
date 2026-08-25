@@ -3,6 +3,19 @@ import type { Bot } from "grammy";
 import type { PersistenceRepository } from "../db/index.js";
 import { aggregateStatistics, type SignalStatistics } from "./stats.js";
 
+export interface MatureResearchSummary {
+  readonly sampled: number;
+  readonly target: number;
+  readonly statistics: SignalStatistics;
+}
+
+export interface OperationalDiagnostics {
+  readonly lastSignalAgeMs: number | null;
+  readonly recentCandidates: number;
+  readonly recentStateCounts: Readonly<Record<string, number>>;
+  readonly sourceFailures: Readonly<Record<"trenches" | "rank_1m" | "rank_5m", number>>;
+}
+
 export type StatsRequest = "current" | "today" | "7d" | "30d" | "detail";
 
 function localParts(timestamp: number, timeZone: string): {
@@ -122,8 +135,14 @@ function sourceLabel(source: string): string {
       return "1m 快榜";
     case "cross_source":
       return "跨榜启动";
+    case "mature_momentum":
+      return "成熟动量";
     case "double_confirmation":
       return "双榜确认";
+    case "early_ordinary":
+      return "Early 普通信号";
+    case "high_risk_observation":
+      return "高风险观察";
     default:
       return "未知来源";
   }
@@ -139,6 +158,8 @@ export function renderStatisticsCard(
   stats: SignalStatistics,
   label: string,
   detail = false,
+  matureResearch?: MatureResearchSummary,
+  diagnostics?: OperationalDiagnostics,
 ): string {
   const lines = [
     `📊 <b>BSC 信号统计 · ${label}</b>`,
@@ -192,6 +213,28 @@ export function renderStatisticsCard(
           `平均延迟 ${latency(source.averageLatencyMs)}`,
       );
     }
+    if (matureResearch !== undefined) {
+      const hit12x = matureResearch.statistics.multipleHits.find((hit) => hit.multiple === 1.2);
+      const hit15x = matureResearch.statistics.multipleHits.find((hit) => hit.multiple === 1.5);
+      lines.push(
+        "",
+        "<b>Mature 影子样本</b>",
+        `采集进度：${matureResearch.statistics.validSamples1h}/${matureResearch.target} 个有效 T+1h（总候选 ${matureResearch.sampled}）`,
+        `≥1.2x：${percentage(hit12x?.rate ?? null)} (${hit12x?.hits ?? 0}/${hit12x?.eligible ?? 0})`,
+        `≥1.5x：${percentage(hit15x?.rate ?? null)} (${hit15x?.hits ?? 0}/${hit15x?.eligible ?? 0})`,
+        `最高倍数中位数：${multiple(matureResearch.statistics.medianPeakMultiple)}`,
+        `1h 中位 MAE：${signed(matureResearch.statistics.medianMae1h)}`,
+      );
+    }
+    if (diagnostics !== undefined) {
+      lines.push(
+        "",
+        "<b>近期运行诊断</b>",
+        `距最后信号：${diagnostics.lastSignalAgeMs === null ? "暂无" : duration(diagnostics.lastSignalAgeMs)}`,
+        `最近 1 小时候选：${diagnostics.recentCandidates}，观察 ${diagnostics.recentStateCounts.observing ?? 0}，拒绝 ${diagnostics.recentStateCounts.rejected ?? 0}，取消 ${diagnostics.recentStateCounts.cancelled ?? 0}，抑制 ${diagnostics.recentStateCounts.suppressed ?? 0}`,
+        `本小时数据源失败：Trenches ${diagnostics.sourceFailures.trenches} · 1m ${diagnostics.sourceFailures.rank_1m} · 5m ${diagnostics.sourceFailures.rank_5m}`,
+      );
+    }
   }
   lines.push(
     "",
@@ -206,6 +249,7 @@ export interface StatsServiceOptions {
   readonly repository: PersistenceRepository;
   readonly timeZone: string;
   readonly configVersion: number;
+  readonly matureSampleTarget?: number;
   readonly now?: () => number;
 }
 
@@ -227,10 +271,67 @@ export class StatsService {
       range.to,
       this.options.configVersion,
     );
+    const matureSamples = this.options.repository
+      .listResearchSamples(from, range.to)
+      .filter(
+        (sample) =>
+          sample.originalConfigVersion === this.options.configVersion &&
+          typeof sample.feature === "object" &&
+          sample.feature !== null &&
+          !Array.isArray(sample.feature) &&
+          (sample.feature as Record<string, unknown>).researchKind === "mature",
+      );
+    const matureRows = matureSamples.map((sample) => ({
+      signalId: -sample.id,
+      configVersion: sample.originalConfigVersion,
+      tokenKey: sample.tokenKey,
+      lifecycle: sample.lifecycle,
+      state: "sent" as const,
+      decision: { evidence: { trigger: "mature_momentum" }, moveClass: "normal" },
+      qualifiedAt: sample.sampledAt,
+      securityCompletedAt: sample.sampledAt,
+      sentAt: sample.sampledAt,
+      confirmedAt: null,
+      outcomes: sample.outcomes,
+    }));
+    const recentFrom = Math.max(stored.createdAt, now - 60 * 60_000);
+    const recent = this.options.repository.summarizeSignals(
+      recentFrom,
+      now + 1,
+      this.options.configVersion,
+    );
+    const pollFailures = (source: "trenches" | "rank_1m" | "rank_5m") => {
+      const value = this.options.repository.getRuntimeState<{
+        readonly hour: number;
+        readonly count: number;
+      }>(`poll_failures_current_hour:${source}`);
+      return value?.hour === Math.floor(now / (60 * 60_000)) ? value.count : 0;
+    };
+    const lastSignal = rows.at(-1);
     return renderStatisticsCard(
       aggregateStatistics(rows, now),
       `${range.label} · v${this.options.configVersion}`,
       request === "detail",
+      request === "detail"
+        ? {
+            sampled: matureSamples.length,
+            target: this.options.matureSampleTarget ?? 30,
+            statistics: aggregateStatistics(matureRows, now),
+          }
+        : undefined,
+      request === "detail"
+        ? {
+            lastSignalAgeMs:
+              lastSignal === undefined ? null : Math.max(0, now - lastSignal.sentAt),
+            recentCandidates: recent.candidates,
+            recentStateCounts: recent.stateCounts,
+            sourceFailures: {
+              trenches: pollFailures("trenches"),
+              rank_1m: pollFailures("rank_1m"),
+              rank_5m: pollFailures("rank_5m"),
+            },
+          }
+        : undefined,
     );
   }
 

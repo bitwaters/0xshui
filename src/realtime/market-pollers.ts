@@ -10,6 +10,7 @@ import type { SnapshotCoordinator } from "./snapshot-store.js";
 export interface MarketPollerOptions {
   readonly client: GmgnHttpClient;
   readonly coordinator: SnapshotCoordinator;
+  readonly rankLimit: number;
   readonly onFailure?: (source: RealtimeSource, error: unknown) => void;
   readonly onOverlap?: (source: RealtimeSource) => void;
   readonly onSuccess?: (source: RealtimeSource, capturedAt: number) => void;
@@ -38,7 +39,7 @@ export function createMarketPollers(
     interval: "1m" | "5m",
   ): SourcePoller => ({
     poll: async () => {
-      const raw = await options.client.fetchRank(interval);
+      const raw = await options.client.fetchRank(interval, options.rankLimit);
       return { value: adaptRank(raw.data, interval), sourceCapturedAt: raw.receivedAt };
     },
     onSuccess: (_source, result) => {

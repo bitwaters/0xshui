@@ -264,7 +264,7 @@ export class GmgnHttpClient {
         limit,
         order_by: "default",
         direction: "desc",
-        filters: ["not_honeypot", "verified", "renounced"],
+        filters: ["not_honeypot"],
       },
     });
   }

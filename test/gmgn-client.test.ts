@@ -92,11 +92,7 @@ test("serializes all five BSC read-only requests with fresh Exist Auth", async (
   }
   const rankUrl = requests[1]?.url;
   assert.equal(rankUrl?.searchParams.get("limit"), "100");
-  assert.deepEqual(rankUrl?.searchParams.getAll("filters"), [
-    "not_honeypot",
-    "verified",
-    "renounced",
-  ]);
+  assert.deepEqual(rankUrl?.searchParams.getAll("filters"), ["not_honeypot"]);
   assert.equal(requests[3]?.url.searchParams.get("resolution"), "30s");
 });
 

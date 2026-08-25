@@ -22,10 +22,26 @@ test("loads and normalizes the documented default configuration", () => {
   assert.equal(config.gmgn.request_timeout, 5_000);
   assert.equal(config.gmgn.max_response_size, 10 * 1_024 * 1_024);
   assert.equal(config.gmgn.local_weight_limit_per_second, 4);
+  assert.equal(config.rank.limit, 100);
+  assert.deepEqual(config.rank.filters, ["not_honeypot"]);
   assert.equal(config.noise.creator_cooldown, 30 * 60_000);
   assert.deepEqual(config.outcomes.checkpoints, [15 * 60_000, 60 * 60_000]);
   assert.ok(Object.isFrozen(config));
   assert.ok(Object.isFrozen(config.gmgn));
+});
+
+test("keeps historical rank filters parseable for stored-config replay", () => {
+  const raw = rawDefaultConfig();
+  raw.rank = {
+    ...(raw.rank as Record<string, unknown>),
+    filters: ["not_honeypot", "verified", "renounced"],
+  };
+
+  assert.deepEqual(parseAppConfig(raw).rank.filters, [
+    "not_honeypot",
+    "verified",
+    "renounced",
+  ]);
 });
 
 test("signal configuration version ignores only delivery activation switches", () => {

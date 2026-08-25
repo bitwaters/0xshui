@@ -11,6 +11,8 @@ addresses and names. They intentionally retain observed envelope and field types
 - A 2026-08-25 live verification observed Rank using `creation_timestamp=0` for an
   unknown optional value and one token overlapping `new_creation`/`near_completion`;
   compact synthetic contract tests preserve both compatibility cases.
+- The 2026-08-25 ranking contract requests up to 100 rows with only the
+  `not_honeypot` upstream filter; local safety rules remain the final gate.
 - Security returned mixed booleans, `0/1`, and decimal strings.
 - `invalid-security-single.json` records the observed HTTP-200/code-0 response for
   an invalid address; its empty critical fields must still fail closed.

@@ -83,6 +83,23 @@ function validateDetectorInput(input: DetectorInput): void {
   ) {
     throw new Error("Detector Rank observation interval does not match its source");
   }
+  const current = input.market.current;
+  if (
+    [current?.trench, current?.rank1m, current?.rank5m].some(
+      (item) => item !== undefined && item.tokenKey !== input.tokenKey,
+    ) ||
+    (current?.rank1m !== undefined && current.rank1m.interval !== "1m") ||
+    (current?.rank5m !== undefined && current.rank5m.interval !== "5m")
+  ) {
+    throw new Error("Detector current source state is inconsistent");
+  }
+  if (
+    Object.values(input.market.currentCapturedAt ?? {}).some(
+      (capturedAt) => !Number.isSafeInteger(capturedAt) || (capturedAt ?? -1) < 0,
+    )
+  ) {
+    throw new Error("Detector current source timestamp is invalid");
+  }
   if (input.security !== undefined && input.security.value.tokenKey !== input.tokenKey) {
     throw new Error("Detector Security token does not match tokenKey");
   }
@@ -126,9 +143,9 @@ function currentSources(input: DetectorInput): {
   readonly rank1?: RankToken;
   readonly rank5?: RankToken;
 } {
-  const trench = latest(input.market.trenches);
-  const rank1 = latest(input.market.rank1m);
-  const rank5 = latest(input.market.rank5m);
+  const trench = input.market.current?.trench ?? latest(input.market.trenches);
+  const rank1 = input.market.current?.rank1m ?? latest(input.market.rank1m);
+  const rank5 = input.market.current?.rank5m ?? latest(input.market.rank5m);
   return {
     ...(trench === undefined ? {} : { trench }),
     ...(rank1 === undefined ? {} : { rank1 }),
@@ -270,7 +287,7 @@ function detectFastRank(input: DetectorInput): TriggerEvidence | null {
     return null;
   }
   const trenchPresent =
-    input.market.sourceFresh.trenches && latest(input.market.trenches) !== undefined;
+    input.market.sourceFresh.trenches && currentSources(input).trench !== undefined;
   const smartMoneyIncreased =
     baseline.smartDegenCount !== undefined &&
     current.smartDegenCount !== undefined &&
@@ -300,9 +317,9 @@ function detectCrossSource(input: DetectorInput): TriggerEvidence | null {
   if (baseline === undefined || current === undefined) {
     return null;
   }
-  const trenchPresent =
-    input.market.sourceFresh.trenches && latest(input.market.trenches) !== undefined;
-  const rank5 = latest(input.market.rank5m);
+  const sources = currentSources(input);
+  const trenchPresent = input.market.sourceFresh.trenches && sources.trench !== undefined;
+  const rank5 = sources.rank5;
   const rank5Present =
     input.market.sourceFresh.rank_5m &&
     rank5 !== undefined &&
@@ -319,8 +336,41 @@ function detectCrossSource(input: DetectorInput): TriggerEvidence | null {
   return evidence(input, "cross_source", trenchPresent ? "high" : "normal");
 }
 
+export function detectMatureTrigger(input: DetectorInput): TriggerEvidence | null {
+  if (!input.market.sourceFresh.rank_1m || !input.market.sourceFresh.rank_5m) {
+    return null;
+  }
+  const sources = currentSources(input);
+  const current1 = sources.rank1;
+  const current5 = sources.rank5;
+  if (current1 === undefined || current5 === undefined) return null;
+  const creationTimestampMs = current1.creationTimestampMs ?? current5.creationTimestampMs;
+  const mature = input.config.mature_momentum;
+  if (
+    creationTimestampMs === undefined ||
+    creationTimestampMs > input.now ||
+    input.now - creationTimestampMs < mature.min_age ||
+    current1.liquidity < mature.min_liquidity ||
+    current1.rank > mature.max_rank_1m ||
+    current5.rank > mature.max_rank_5m ||
+    current1.buys <= current1.sells
+  ) return null;
+  const points = freshTail(input.market.rank1m, input.now, mature.window);
+  const baseline = valueOf(points[0]);
+  if (baseline === undefined || points.length < 2) return null;
+  const improved = baseline.rank - current1.rank >= mature.min_rank_improvement;
+  const sustained =
+    baseline.rank <= mature.sustain_rank_1m &&
+    current1.rank <= mature.sustain_rank_1m &&
+    current1.rank - baseline.rank <= mature.max_rank_fallback;
+  return improved || sustained ? evidence(input, "mature_momentum", "normal") : null;
+}
+
 export function detectTrigger(input: DetectorInput): TriggerEvidence | null {
-  return detectCurve(input) ?? detectFastRank(input) ?? detectCrossSource(input);
+  return detectCurve(input) ??
+    detectFastRank(input) ??
+    detectCrossSource(input) ??
+    (input.config.mature_momentum.live_delivery ? detectMatureTrigger(input) : null);
 }
 
 export function shouldPreheatSecurity(input: DetectorInput): boolean {
@@ -383,37 +433,45 @@ function confirmationEvidence(
   if (!input.market.sourceFresh.rank_1m || !input.market.sourceFresh.rank_5m) {
     return false;
   }
-  const window = input.config.gmgn.source_max_age_for_trigger;
-  const rank1 = freshTail(input.market.rank1m, input.now, window);
-  const rank5 = freshTail(input.market.rank5m, input.now, window);
-  const needed = input.config.confirmation.min_fresh_snapshots;
-  if (rank1.length < needed || rank5.length < needed) {
-    return false;
+  if (reference.rank1m === undefined) {
+    const window = input.config.gmgn.source_max_age_for_trigger;
+    const rank1 = freshTail(input.market.rank1m, input.now, window);
+    const rank5 = freshTail(input.market.rank5m, input.now, window);
+    if (rank1.length < 2 || rank5.length < 2) return false;
+    const first1 = valueOf(rank1[0]);
+    const current1 = valueOf(rank1.at(-1));
+    const current5 = valueOf(rank5.at(-1));
+    return (
+      first1 !== undefined &&
+      current1 !== undefined &&
+      current5 !== undefined &&
+      current1.rank <= input.config.confirmation.max_rank_1m &&
+      current5.rank <= input.config.confirmation.max_rank_5m &&
+      current1.buys > current1.sells &&
+      current1.rank - first1.rank <= input.config.confirmation.max_rank_1m_fallback &&
+      (current1.holderCount > first1.holderCount || current1.swaps > first1.swaps)
+    );
   }
-  const recent1 = rank1.slice(-needed).map((item) => valueOf(item));
-  const recent5 = rank5.slice(-needed).map((item) => valueOf(item));
-  if (recent1.some((item) => item === undefined) || recent5.some((item) => item === undefined)) {
-    return false;
-  }
-  const current1 = recent1.at(-1) as RankToken;
-  const current5 = recent5.at(-1) as RankToken;
-  const first1 = valueOf(rank1[0]);
-  const first5 = valueOf(rank5[0]);
-  const baseRank1 = reference.rank1m ?? first1?.rank;
-  const baseRank5 = reference.rank5m ?? first5?.rank;
-  const baseHolders = reference.rank1HolderCount ?? first1?.holderCount;
-  const baseSwaps = reference.rank1Swaps ?? first1?.swaps;
+  const { rank1: current1, rank5: current5 } = currentSources(input);
+  const captured1 = input.market.currentCapturedAt?.rank_1m;
+  const captured5 = input.market.currentCapturedAt?.rank_5m;
+  if (
+    current1 === undefined ||
+    current5 === undefined ||
+    captured1 === undefined ||
+    captured5 === undefined ||
+    captured1 <= reference.qualifiedAt ||
+    captured5 <= reference.qualifiedAt
+  ) return false;
+  const baseRank1 = reference.rank1m;
+  const baseHolders = reference.rank1HolderCount;
+  const baseSwaps = reference.rank1Swaps;
   return (
-    recent1.every(
-      (item) =>
-        (item as RankToken).rank <= input.config.confirmation.max_rank_1m &&
-        (item as RankToken).buys > (item as RankToken).sells,
-    ) &&
-    recent5.every((item) => (item as RankToken).rank <= input.config.confirmation.max_rank_5m) &&
+    current1.rank <= input.config.confirmation.max_rank_1m &&
+    current5.rank <= input.config.confirmation.max_rank_5m &&
+    current1.buys > current1.sells &&
     baseRank1 !== undefined &&
-    baseRank5 !== undefined &&
-    baseRank1 - current1.rank >= input.config.confirmation.min_rank_1m_improvement &&
-    baseRank5 - current5.rank >= input.config.confirmation.min_rank_5m_improvement &&
+    current1.rank - baseRank1 <= input.config.confirmation.max_rank_1m_fallback &&
     ((baseHolders !== undefined && current1.holderCount > baseHolders) ||
       (baseSwaps !== undefined && current1.swaps > baseSwaps))
   );

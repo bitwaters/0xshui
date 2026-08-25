@@ -6,6 +6,7 @@ import {
   DETECTOR_VERSION,
   canTransitionSignalState,
   classifyMove,
+  detectMatureTrigger,
   detectTrigger,
   evaluateDetector,
   evaluateSafety,
@@ -187,6 +188,87 @@ test("cross-source path accepts exact rank and participation boundaries", () => 
     },
   });
   assert.equal(detectTrigger(candidate)?.trigger, "cross_source");
+});
+
+test("cross-source uses authoritative current 5m presence without fake momentum", () => {
+  const currentRank5 = rank({ interval: "5m", rank: 40 });
+  const candidate = input({
+    market: {
+      trenches: [],
+      rank1m: [
+        observation(NOW - 5_000, rank({ rank: 25, holderCount: 100, swaps: 100 })),
+        observation(NOW, rank({ rank: 20, holderCount: 103, swaps: 100 })),
+      ],
+      rank5m: [],
+      current: { rank1m: rank({ rank: 20, holderCount: 103 }), rank5m: currentRank5 },
+      sourceFresh: { trenches: false, rank_1m: true, rank_5m: true },
+    },
+  });
+  assert.equal(detectTrigger(candidate)?.trigger, "cross_source");
+
+  assert.equal(
+    detectTrigger(
+      input({
+        market: {
+          trenches: [],
+          rank1m: [observation(NOW, rank({ rank: 5 }))],
+          rank5m: [],
+          current: { rank1m: rank({ rank: 5 }), rank5m: currentRank5 },
+          sourceFresh: { trenches: false, rank_1m: true, rank_5m: true },
+        },
+      }),
+    ),
+    null,
+    "current state alone must not create a rank-improvement event",
+  );
+});
+
+test("mature momentum is age and liquidity gated and remains shadow-only by default", () => {
+  const oldRank1 = rank({
+    rank: 20,
+    liquidity: 30_000,
+    creationTimestampMs: NOW - 2 * 60 * 60_000,
+  });
+  const oldRank5 = rank({
+    interval: "5m",
+    rank: 40,
+    liquidity: 30_000,
+    creationTimestampMs: NOW - 2 * 60 * 60_000,
+  });
+  const market = {
+    trenches: [],
+    rank1m: [
+      observation(NOW - 30_000, { ...oldRank1, rank: 23 }),
+      observation(NOW, oldRank1),
+    ],
+    rank5m: [],
+    current: { rank1m: oldRank1, rank5m: oldRank5 },
+    sourceFresh: { trenches: false, rank_1m: true, rank_5m: true },
+  } as const;
+  const shadow = input({ market, security: { capturedAt: NOW, value: security() } });
+  assert.equal(detectMatureTrigger(shadow)?.trigger, "mature_momentum");
+  assert.equal(detectTrigger(shadow), null);
+
+  const live = input({
+    market,
+    config: {
+      ...config,
+      mature_momentum: { ...config.mature_momentum, live_delivery: true },
+    },
+    security: { capturedAt: NOW, value: security() },
+  });
+  assert.equal(evaluateDetector(live).evidence?.trigger, "mature_momentum");
+  assert.equal(
+    detectMatureTrigger(
+      input({
+        market: {
+          ...market,
+          current: { rank1m: { ...oldRank1, liquidity: 29_999 }, rank5m: oldRank5 },
+        },
+      }),
+    ),
+    null,
+  );
 });
 
 test("Security hard thresholds pass at equality and reject immediately above", () => {
@@ -429,7 +511,7 @@ test("double-rank confirmation edits the sent lifecycle and can make a direct ca
     lifecycle: "graduated",
     priority: "normal",
     qualifiedAt: NOW - 8_000,
-    rank1m: 20,
+    rank1m: 5,
     rank5m: 40,
     rank1HolderCount: 100,
     rank1Swaps: 100,
@@ -445,6 +527,11 @@ test("double-rank confirmation edits the sent lifecycle and can make a direct ca
       observation(NOW - 1_000, rank({ interval: "5m", rank: 38 })),
       observation(NOW, rank({ interval: "5m", rank: 37 })),
     ],
+    current: {
+      rank1m: rank({ rank: 5, holderCount: 104, swaps: 111 }),
+      rank5m: rank({ interval: "5m", rank: 37 }),
+    },
+    currentCapturedAt: { rank_1m: NOW, rank_5m: NOW },
     sourceFresh: { trenches: false, rank_1m: true, rank_5m: true },
   } as const;
   const sent = evaluateDetector(input({ state: "sent", candidate, market }));
@@ -688,7 +775,7 @@ test("rank triggers reject each failed ranking, direction, participation, and fr
     "fast_rank",
   );
   assert.notEqual(
-    fastTriggerFor(rank({ rank: 24, holderCount: 100 }), rank({ rank: 10, holderCount: 103, smartDegenCount: 1 })),
+    fastTriggerFor(rank({ rank: 17, holderCount: 100 }), rank({ rank: 10, holderCount: 103, smartDegenCount: 1 })),
     "fast_rank",
   );
   assert.notEqual(
@@ -726,7 +813,7 @@ test("rank triggers reject each failed ranking, direction, participation, and fr
   const crossBefore = rank({ rank: 40, holderCount: 100, swaps: 100 });
   assert.notEqual(crossTriggerFor(crossBefore, rank({ rank: 31, holderCount: 103 })), "cross_source");
   assert.notEqual(
-    crossTriggerFor(rank({ rank: 39, holderCount: 100 }), rank({ rank: 30, holderCount: 103 })),
+    crossTriggerFor(rank({ rank: 34, holderCount: 100 }), rank({ rank: 30, holderCount: 103 })),
     "cross_source",
   );
   assert.notEqual(

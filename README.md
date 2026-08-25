@@ -2,6 +2,15 @@
 
 A BSC-only Telegram signal bot that uses GMGN OpenAPI for market discovery and safety data. V1 sends signals and measures their outcomes; it does not hold a wallet, sign transactions, or trade.
 
+## Current signal-quality rules
+
+- Both 1m and 5m ranking requests use the configured `limit: 100` and only the `not_honeypot` upstream prefilter. GMGN may still return fewer than 100 rows; the runtime never pads or locally truncates a valid short response.
+- The latest complete source response is kept in memory for current rank presence, while SQLite and momentum windows continue to contain only genuine changes.
+- Fast Rank requires a Top10 rank plus an eight-place improvement in ten seconds. Cross Source requires 1m Top30, 5m Top80, and a five-place 1m improvement.
+- Mature Momentum is research-only by default. It requires age of at least one hour, liquidity of at least $30,000, 1m Top20, 5m Top40, buy pressure, and either a three-place 60-second improvement or sustained Top10 strength. `/stats detail` shows progress toward 30 valid T+1h Mature samples.
+- Delivery fails closed without fresh positive liquidity. Graduated tokens use Pool Info; curve tokens use fresh Trenches liquidity. Liquidity below $5,000 is labeled as a high-risk observation.
+- Confirmation means sustained fresh 1m/5m strength without a fallback greater than five 1m places; it no longer requires an additional fixed rank jump.
+
 ## Requirements
 
 - Node.js 22 and npm 10
@@ -84,6 +93,8 @@ npm run acceptance
 Acceptance is sample-based, not time-based. The current configuration needs at least 100 valid T+1h signal outcomes, at least 20 from each of the three trigger paths, at least 90% T+1h outcome coverage, enough latency observations, 10,000 GMGN requests with at least 99% success, and no uncontrolled 429 or critical schema failure. Review signal quality at 30 samples, establish the first baseline at 100, then review every additional 50 samples.
 
 Security-passed preheat candidates are also stored as a compact research cohort, capped at five per rolling minute. Their 15m/1h outcomes support later parameter replay but never count as Telegram signals or acceptance samples. If the SQLite soft limit is reached after ordinary snapshots are pruned, the oldest auxiliary research samples are removed before any real signal result.
+
+Detailed statistics separate ordinary Early signals, high-risk observations, and Mature research. They also show time since the latest signal, recent candidate-state counts, and current-hour source failures. Signal quality remains sample-based; a quiet market never causes thresholds to loosen automatically.
 
 ## Docker Compose deployment
 

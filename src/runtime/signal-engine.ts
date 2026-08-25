@@ -6,6 +6,7 @@ import type {
 } from "../db/index.js";
 import {
   DETECTOR_VERSION,
+  detectMatureTrigger,
   evaluateDetector,
   passesResearchSafety,
   shouldPreheatSecurity,
@@ -16,7 +17,7 @@ import {
   type Observation,
   type RecentSignal,
 } from "../detection/index.js";
-import type { RankToken, SecuritySnapshot, TrenchesToken } from "../gmgn/index.js";
+import type { PoolSnapshot, RankToken, SecuritySnapshot, TrenchesToken } from "../gmgn/index.js";
 import type { AppLogger } from "../logging/index.js";
 import type { HealthMonitor } from "../operations/index.js";
 import type { TokenWindowStore } from "../realtime/index.js";
@@ -35,6 +36,46 @@ interface SecurityAccess {
   ) => { readonly snapshot: SecuritySnapshot; readonly capturedAt: number } | null;
 }
 
+interface PoolAccess {
+  readonly getFreshForSend: (
+    tokenKey: string,
+  ) => Promise<{ readonly snapshot: PoolSnapshot; readonly capturedAt: number } | null>;
+}
+
+export type DeliveryLiquidityResult =
+  | { readonly ok: true; readonly liquidity: number; readonly thin: boolean }
+  | { readonly ok: false; readonly reason: string };
+
+export function assessDeliveryLiquidity(input: {
+  readonly lifecycle: "curve" | "graduated";
+  readonly now: number;
+  readonly maximumAgeMs: number;
+  readonly curveSourceFresh: boolean;
+  readonly curveLiquidity?: number;
+  readonly pool?: { readonly snapshot: PoolSnapshot; readonly capturedAt: number } | null;
+}): DeliveryLiquidityResult {
+  const observed = input.lifecycle === "curve" ? input.curveLiquidity : input.pool?.snapshot.liquidity;
+  if (
+    (input.lifecycle === "curve" && !input.curveSourceFresh) ||
+    (input.lifecycle === "graduated" &&
+      (input.pool === undefined ||
+        input.pool === null ||
+        input.pool.capturedAt > input.now ||
+        input.now - input.pool.capturedAt > input.maximumAgeMs)) ||
+    observed === undefined ||
+    !Number.isFinite(observed) ||
+    observed <= 0
+  ) {
+    return {
+      ok: false,
+      reason: input.lifecycle === "curve"
+        ? "curve_liquidity_unavailable"
+        : "pool_liquidity_unavailable",
+    };
+  }
+  return { ok: true, liquidity: observed, thin: observed < 5_000 };
+}
+
 interface EngineState {
   state: SignalState;
   readonly discovery: DiscoveryReference;
@@ -47,6 +88,7 @@ export interface SignalEngineOptions {
   readonly repository: PersistenceRepository;
   readonly windowStore: TokenWindowStore;
   readonly security: SecurityAccess;
+  readonly pool?: PoolAccess;
   readonly publisher?: TelegramPublisher;
   readonly logger: AppLogger;
   readonly health: HealthMonitor;
@@ -68,7 +110,8 @@ function candidateFromDecision(value: unknown): CandidateReference | undefined {
     reference === null ||
     (reference.trigger !== "curve_acceleration" &&
       reference.trigger !== "fast_rank" &&
-      reference.trigger !== "cross_source") ||
+      reference.trigger !== "cross_source" &&
+      reference.trigger !== "mature_momentum") ||
     (reference.lifecycle !== "curve" && reference.lifecycle !== "graduated") ||
     (reference.priority !== "normal" && reference.priority !== "high") ||
     typeof reference.qualifiedAt !== "number"
@@ -211,12 +254,23 @@ export class SignalEngine {
   private inputFor(tokenKey: string, now: number, excludeOwnRecent = false): DetectorInput | null {
     const events = this.options.windowStore.getEvents(tokenKey, now);
     const sourceEvents = events.filter((event) => event.source !== "security");
-    if (sourceEvents.length === 0) return null;
+    const currentTrench = this.options.windowStore.getCurrent<TrenchesToken>(tokenKey, "trenches");
+    const currentRank1 = this.options.windowStore.getCurrent<RankToken>(tokenKey, "rank_1m");
+    const currentRank5 = this.options.windowStore.getCurrent<RankToken>(tokenKey, "rank_5m");
+    const currentTrenchAt = this.options.windowStore.getCurrentCapturedAt("trenches");
+    const currentRank1At = this.options.windowStore.getCurrentCapturedAt("rank_1m");
+    const currentRank5At = this.options.windowStore.getCurrentCapturedAt("rank_5m");
+    if (
+      sourceEvents.length === 0 &&
+      currentTrench === undefined &&
+      currentRank1 === undefined &&
+      currentRank5 === undefined
+    ) return null;
     let state = this.states.get(tokenKey);
     if (state === undefined) {
       const stored = this.options.repository.getDetectionState(tokenKey);
       const first = sourceEvents[0];
-      const payload = record(first?.data);
+      const payload = record(first?.data) ?? record(currentRank1) ?? record(currentTrench);
       const storedCandidate = candidateFromDecision(stored?.decision);
       state = {
         state:
@@ -256,12 +310,23 @@ export class SignalEngine {
         trenches,
         rank1m,
         rank5m,
+        current: {
+          ...(currentTrench === undefined ? {} : { trench: currentTrench }),
+          ...(currentRank1 === undefined ? {} : { rank1m: currentRank1 }),
+          ...(currentRank5 === undefined ? {} : { rank5m: currentRank5 }),
+        },
+        currentCapturedAt: {
+          ...(currentTrenchAt === undefined ? {} : { trenches: currentTrenchAt }),
+          ...(currentRank1At === undefined ? {} : { rank_1m: currentRank1At }),
+          ...(currentRank5At === undefined ? {} : { rank_5m: currentRank5At }),
+        },
         sourceFresh: {
           trenches: this.options.windowStore.isSourceFresh("trenches", now),
           rank_1m: this.options.windowStore.isSourceFresh("rank_1m", now),
           rank_5m: this.options.windowStore.isSourceFresh("rank_5m", now),
         },
-        rank1mMissingSuccesses: rank1m.at(-1)?.value?.rank === 101 ? 1 : 0,
+        rank1mMissingSuccesses:
+          this.options.windowStore.getConsecutiveRankMisses(tokenKey, "rank_1m"),
       },
       ...(cached === null ? {} : { security: { capturedAt: cached.capturedAt, value: cached.snapshot } }),
       discovery: state.discovery,
@@ -309,8 +374,9 @@ export class SignalEngine {
   }
 
   private persistResearch(input: DetectorInput, now: number): void {
-    if (!shouldPreheatSecurity(input) || !passesResearchSafety(input)) return;
-    const sample = buildResearchSample(input);
+    const mature = detectMatureTrigger(input);
+    if ((mature === null && !shouldPreheatSecurity(input)) || !passesResearchSafety(input)) return;
+    const sample = buildResearchSample(input, mature === null ? "general" : "mature");
     if (sample === null) return;
     try {
       const created = this.options.repository.createResearchSample({
@@ -321,7 +387,7 @@ export class SignalEngine {
         baselinePrice: sample.baselinePrice,
         feature: sample.feature,
         detectorVersion: DETECTOR_VERSION,
-        upstreamFilterVersion: "gmgn-safe-v1",
+        upstreamFilterVersion: "gmgn-not-honeypot-v2",
         adapterVersion: "gmgn-adapter-v1",
         outcomeCheckpointsMs: this.options.config.outcomes.checkpoints,
       });
@@ -342,30 +408,88 @@ export class SignalEngine {
       this.persist(input, result, this.now());
       return { ok: false, reason: result.reason ?? "candidate_no_longer_qualified" };
     }
-    const card = this.cardFor(input, result, false);
+    const liquidity = await this.liquidityForSend(input, result);
+    if (!liquidity.ok) return liquidity;
+    const deliveryResult: DetectorDecision = liquidity.thin
+      ? { ...result, moveClass: "observation_only" }
+      : result;
+    if (deliveryResult !== result) this.persist(input, deliveryResult, this.now());
+    const card = this.cardFor(input, deliveryResult, false, liquidity.liquidity);
     return card === null ? { ok: false, reason: "card_data_missing" } : { ok: true, card };
+  }
+
+  private async liquidityForSend(
+    input: DetectorInput,
+    result: DetectorDecision,
+  ): Promise<DeliveryLiquidityResult> {
+    const lifecycle = result.evidence?.lifecycle ?? input.candidate?.lifecycle;
+    if (lifecycle !== "curve" && lifecycle !== "graduated") {
+      return { ok: false, reason: "pool_liquidity_unavailable" };
+    }
+    const now = this.now();
+    if (lifecycle === "curve") {
+      const trench = input.market.current?.trench ?? input.market.trenches.at(-1)?.value ?? undefined;
+      return assessDeliveryLiquidity({
+        lifecycle,
+        now,
+        maximumAgeMs: this.options.config.gmgn.security_max_age_at_send,
+        curveSourceFresh: input.market.sourceFresh.trenches,
+        ...(trench?.liquidity === undefined ? {} : { curveLiquidity: trench.liquidity }),
+      });
+    }
+    if (this.options.pool === undefined) {
+      return { ok: false, reason: "pool_liquidity_unavailable" };
+    }
+    try {
+      const current = await this.options.pool.getFreshForSend(input.tokenKey);
+      if (current !== null && current.snapshot.tokenKey !== input.tokenKey) {
+        return { ok: false, reason: "pool_liquidity_unavailable" };
+      }
+      return assessDeliveryLiquidity({
+        lifecycle,
+        now,
+        maximumAgeMs: this.options.config.gmgn.security_max_age_at_send,
+        curveSourceFresh: input.market.sourceFresh.trenches,
+        pool: current,
+      });
+    } catch {
+      return { ok: false, reason: "pool_liquidity_unavailable" };
+    }
   }
 
   private cardFor(
     input: DetectorInput,
     result: DetectorDecision,
     confirmed: boolean,
+    liquidityOverride?: number,
   ): SignalCardModel | null {
     const evidence = result.evidence;
     const reference = evidence?.reference ?? input.candidate;
     if (reference === undefined) return null;
-    const latestRank1 = input.market.rank1m.at(-1)?.value ?? undefined;
-    const latestRank5 = input.market.rank5m.at(-1)?.value ?? undefined;
-    const latestTrench = input.market.trenches.at(-1)?.value ?? undefined;
+    const latestRank1 = input.market.current?.rank1m ?? input.market.rank1m.at(-1)?.value ?? undefined;
+    const latestRank5 = input.market.current?.rank5m ?? input.market.rank5m.at(-1)?.value ?? undefined;
+    const latestTrench = input.market.current?.trench ?? input.market.trenches.at(-1)?.value ?? undefined;
     const name = latestRank1?.name ?? latestTrench?.name;
     const symbol = latestRank1?.symbol ?? latestTrench?.symbol;
+    const creationTimestampMs =
+      latestRank1?.creationTimestampMs ?? latestTrench?.creationTimestampMs;
+    const liquidity = liquidityOverride ?? latestRank1?.liquidity ?? latestTrench?.liquidity;
     return {
       tokenKey: input.tokenKey,
       ...(name === undefined ? {} : { name }),
       ...(symbol === undefined ? {} : { symbol }),
       lifecycle: evidence?.lifecycle ?? reference.lifecycle,
       trigger: evidence?.trigger ?? reference.trigger,
-      moveClass: result.moveClass ?? "unknown",
+      signalType:
+        (evidence?.trigger ?? reference.trigger) === "mature_momentum" ? "mature" : "early",
+      moveClass:
+        liquidityOverride !== undefined && liquidityOverride < 5_000
+          ? "observation_only"
+          : (result.moveClass ?? "unknown"),
+      ...(liquidity === undefined ? {} : { liquidity }),
+      ...(creationTimestampMs === undefined
+        ? {}
+        : { tokenAgeMs: Math.max(0, input.now - creationTimestampMs) }),
       ...(evidence?.currentPrice === undefined ? {} : { price: evidence.currentPrice }),
       ...(evidence?.currentMarketCap === undefined
         ? {}

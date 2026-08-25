@@ -39,8 +39,6 @@ rank:
     - 5m
   filters:
     - not_honeypot
-    - verified
-    - renounced
 
 risk_filters:
   max_rug: 0.30
@@ -71,20 +69,30 @@ curve_trigger:
 fast_rank_trigger:
   window: 10s
   max_rank_1m: 10
-  min_rank_improvement: 15
+  min_rank_improvement: 8
   min_fresh_snapshots: 2
 
 cross_source_trigger:
   max_rank_1m: 30
-  min_rank_improvement: 10
+  min_rank_improvement: 5
   max_rank_5m: 80
+
+mature_momentum:
+  live_delivery: false
+  min_age: 1h
+  min_liquidity: 30000
+  max_rank_1m: 20
+  max_rank_5m: 40
+  window: 60s
+  min_rank_improvement: 3
+  sustain_rank_1m: 10
+  max_rank_fallback: 5
+  sample_target: 30
 
 confirmation:
   max_rank_1m: 30
   max_rank_5m: 50
-  min_rank_1m_improvement: 5
-  min_rank_5m_improvement: 3
-  min_fresh_snapshots: 2
+  max_rank_1m_fallback: 5
 
 cancel:
   rank_fallback: 15

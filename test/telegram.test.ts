@@ -24,9 +24,12 @@ function card(overrides: Partial<SignalCardModel> = {}): SignalCardModel {
     symbol: "SIG",
     lifecycle: "graduated",
     trigger: "fast_rank",
+    signalType: "early",
     moveClass: "normal",
     price: 0.001,
     marketCap: 100_000,
+    liquidity: 20_000,
+    tokenAgeMs: 2 * 60 * 60_000,
     rank1m: 5,
     rank5m: 20,
     confirmed: false,
@@ -93,6 +96,16 @@ test("signal cards escape hostile metadata, stay concise, and omit internal rule
   assert.ok(!rendered.text.includes("0.30"));
   assert.ok(!rendered.text.includes("快照"));
   assert.ok(rendered.text.includes("仅作观察信号"));
+  assert.ok(rendered.text.includes("流动性：$20K"));
+  assert.ok(rendered.text.includes("年龄：2h"));
+  assert.ok(rendered.text.includes("高风险观察"));
+});
+
+test("fast-rise cards are visibly classified as high-risk observations", () => {
+  const rendered = renderSignalCard(card({ moveClass: "fast_rise" }));
+
+  assert.ok(rendered.text.includes("BSC High-Risk Watch"));
+  assert.ok(rendered.text.includes("快速拉升 / 高追涨风险"));
 });
 
 test("keyboard uses only fixed GMGN, BscScan, and copy-contract actions", () => {

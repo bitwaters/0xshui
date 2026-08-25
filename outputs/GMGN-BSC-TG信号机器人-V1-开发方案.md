@@ -190,7 +190,7 @@ interval = 1m
 limit = 100
 order_by = default
 direction = desc
-filters = [not_honeypot, verified, renounced]
+filters = [not_honeypot]
 ```
 
 ### 4.3 5m 聚合热榜
@@ -204,7 +204,7 @@ interval = 5m
 limit = 100
 order_by = default
 direction = desc
-filters = [not_honeypot, verified, renounced]
+filters = [not_honeypot]
 ```
 
 ### 4.4 Token Security
@@ -248,7 +248,7 @@ V1 为保持简单和控制风险，保留 GMGN 服务端安全过滤：
 
 ```text
 Trenches：filter_preset = safe
-Rank：显式 filters = [not_honeypot, verified, renounced]
+Rank：显式 `limit=100`、`filters=[not_honeypot]`；候选发送前仍必须通过 GMGN Security，移除 `verified/renounced` 仅用于扩大榜单发现覆盖，不会绕过安全终审。
 ```
 
 因此历史回算只覆盖“GMGN 上游安全过滤后的候选集合”，可以优化本地动量、排名、噪音和更严格的安全阈值，但不能评估被上游过滤掉的代币，也不能回算比上游 Safe 更宽松的安全条件。每条快照必须记录 `upstream_filter_version`，避免 GMGN 默认过滤规则变化后混合比较。
@@ -934,7 +934,7 @@ time_to_2x_ms
 
 收益基准统一使用 `sent_price`，即发送前最终快照价格，而不是首次发现价格。
 
-已毕业信号发送后异步调用一次 `token pool` 保存池地址和流动性；不等待该请求完成才发送 Telegram。它只为后续识别撤池提供基线，不参与实时触发。
+发送前必须重新确认当前正流动性：已毕业代币同步调用一次 `token pool`，Bonding Curve 代币使用当前有效的 Trenches 流动性。池缺失、流动性缺失或为 0 时取消推送；流动性低于 5,000 USD 时只作为高风险观察信号。已毕业信号发送后仍异步保存池基线，供后续识别撤池和结果回算使用。
 
 15 分钟和 1 小时两个观察周期各自必须进入以下终态之一，不能无限停留在“待评估”：
 
@@ -1323,8 +1323,6 @@ rank:
     - 5m
   filters:
     - not_honeypot
-    - verified
-    - renounced
 
 risk_filters:
   max_rug: 0.30
@@ -1355,20 +1353,30 @@ curve_trigger:
 fast_rank_trigger:
   window: 10s
   max_rank_1m: 10
-  min_rank_improvement: 15
+  min_rank_improvement: 8
   min_fresh_snapshots: 2
 
 cross_source_trigger:
   max_rank_1m: 30
-  min_rank_improvement: 10
+  min_rank_improvement: 5
   max_rank_5m: 80
+
+mature_momentum:
+  live_delivery: false
+  min_age: 1h
+  min_liquidity: 30000
+  max_rank_1m: 20
+  max_rank_5m: 40
+  window: 60s
+  min_rank_improvement: 3
+  sustain_rank_1m: 10
+  max_rank_fallback: 5
+  sample_target: 30
 
 confirmation:
   max_rank_1m: 30
   max_rank_5m: 50
-  min_rank_1m_improvement: 5
-  min_rank_5m_improvement: 3
-  min_fresh_snapshots: 2
+  max_rank_1m_fallback: 5
 
 cancel:
   rank_fallback: 15

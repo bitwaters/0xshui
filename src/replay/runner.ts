@@ -35,6 +35,12 @@ interface TokenHistory {
   rank5m: Array<Observation<RankToken>>;
 }
 
+interface ReplayCurrentState {
+  readonly trenches: Map<string, TrenchesToken>;
+  readonly rank1m: Map<string, RankToken>;
+  readonly rank5m: Map<string, RankToken>;
+}
+
 interface TokenState {
   state: SignalState;
   discovery: DiscoveryReference;
@@ -136,6 +142,11 @@ export class ReplayRunner {
     );
     const events = this.options.repository.listReplayEvents(replayFrom, this.options.to);
     const histories = new Map<string, TokenHistory>();
+    const current: ReplayCurrentState = {
+      trenches: new Map(),
+      rank1m: new Map(),
+      rank5m: new Map(),
+    };
     const states = new Map<string, TokenState>();
     const security = new Map<string, { capturedAt: number; value: SecuritySnapshot }>();
     const sourceSuccessAt = new Map<"trenches" | "rank_1m" | "rank_5m", number>();
@@ -176,15 +187,22 @@ export class ReplayRunner {
         sourceSuccessAt.set(event.source, event.capturedAt);
         const history = histories.get(event.tokenKey) ?? { trenches: [], rank1m: [], rank5m: [] };
         if (event.source === "trenches") {
+          const value = parseTrenches(event);
           appendObservation(history.trenches, {
             capturedAt: event.capturedAt,
-            value: parseTrenches(event),
+            value,
           });
+          if (value === null) current.trenches.delete(event.tokenKey);
+          else current.trenches.set(event.tokenKey, value);
         } else {
+          const value = parseRank(event);
           appendObservation(event.source === "rank_1m" ? history.rank1m : history.rank5m, {
             capturedAt: event.capturedAt,
-            value: parseRank(event),
+            value,
           });
+          const sourceCurrent = event.source === "rank_1m" ? current.rank1m : current.rank5m;
+          if (event.eventType === "exit") sourceCurrent.delete(event.tokenKey);
+          else sourceCurrent.set(event.tokenKey, value);
         }
         histories.set(event.tokenKey, history);
         if (!states.has(event.tokenKey)) {
@@ -212,7 +230,7 @@ export class ReplayRunner {
           configVersion: storedConfig.version,
           config,
           state: state.state,
-          market: this.marketAt(history, sourceSuccessAt, now, config),
+          market: this.marketAt(tokenKey, history, current, sourceSuccessAt, now, config),
           ...(cachedSecurity === undefined ? {} : { security: cachedSecurity }),
           discovery: state.discovery,
           ...(state.candidate === undefined ? {} : { candidate: state.candidate }),
@@ -344,6 +362,7 @@ export class ReplayRunner {
       scopeLimitations: [
         "仅覆盖已保存的 GMGN 上游过滤后候选，不能评估被上游过滤掉的代币。",
         "普通榜单 update 历史精度最多为 5 秒，高频候选保留全部变化。",
+        "历史快照没有记录空响应心跳；回放可识别离榜事件，但不能还原离榜后的连续成功缺席次数。",
         "回放不调用 GMGN 或 Telegram；质量对比只使用数据库中已有结果。",
         "研究质量仅基于 Security 已通过预热候选，每分钟最多 5 个，不包含完整跨 token 限频语义。",
       ],
@@ -351,7 +370,9 @@ export class ReplayRunner {
   }
 
   private marketAt(
+    tokenKey: string,
     history: TokenHistory,
+    current: ReplayCurrentState,
     sourceSuccessAt: ReadonlyMap<"trenches" | "rank_1m" | "rank_5m", number>,
     now: number,
     config: AppConfig,
@@ -360,10 +381,26 @@ export class ReplayRunner {
       const capturedAt = sourceSuccessAt.get(source);
       return capturedAt !== undefined && now - capturedAt <= config.gmgn.source_max_age_for_trigger;
     };
+    const currentTrench = current.trenches.get(tokenKey);
+    const currentRank1 = current.rank1m.get(tokenKey);
+    const currentRank5 = current.rank5m.get(tokenKey);
+    const currentTrenchAt = sourceSuccessAt.get("trenches");
+    const currentRank1At = sourceSuccessAt.get("rank_1m");
+    const currentRank5At = sourceSuccessAt.get("rank_5m");
     return {
       trenches: history.trenches,
       rank1m: history.rank1m,
       rank5m: history.rank5m,
+      current: {
+        ...(currentTrench === undefined ? {} : { trench: currentTrench }),
+        ...(currentRank1 === undefined ? {} : { rank1m: currentRank1 }),
+        ...(currentRank5 === undefined ? {} : { rank5m: currentRank5 }),
+      },
+      currentCapturedAt: {
+        ...(currentTrenchAt === undefined ? {} : { trenches: currentTrenchAt }),
+        ...(currentRank1At === undefined ? {} : { rank_1m: currentRank1At }),
+        ...(currentRank5At === undefined ? {} : { rank_5m: currentRank5At }),
+      },
       sourceFresh: {
         trenches: fresh("trenches"),
         rank_1m: fresh("rank_1m"),

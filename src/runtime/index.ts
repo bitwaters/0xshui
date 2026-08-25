@@ -1,1 +1,6 @@
-export { SignalEngine, type SignalEngineOptions } from "./signal-engine.js";
+export {
+  SignalEngine,
+  assessDeliveryLiquidity,
+  type DeliveryLiquidityResult,
+  type SignalEngineOptions,
+} from "./signal-engine.js";

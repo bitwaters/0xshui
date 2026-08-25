@@ -8,7 +8,11 @@ import type { SignalPriority, SignalState } from "../db/index.js";
 
 export const DETECTOR_VERSION = "bsc-detector-v1";
 
-export type TriggerKind = "curve_acceleration" | "fast_rank" | "cross_source";
+export type TriggerKind =
+  | "curve_acceleration"
+  | "fast_rank"
+  | "cross_source"
+  | "mature_momentum";
 export type MoveClass = "normal" | "fast_rise" | "observation_only" | "unknown";
 export type DetectorAction =
   | "observe"
@@ -29,6 +33,14 @@ export interface DetectorMarket {
   readonly trenches: readonly Observation<TrenchesToken>[];
   readonly rank1m: readonly Observation<RankToken>[];
   readonly rank5m: readonly Observation<RankToken>[];
+  readonly current?: {
+    readonly trench?: TrenchesToken;
+    readonly rank1m?: RankToken;
+    readonly rank5m?: RankToken;
+  };
+  readonly currentCapturedAt?: Partial<
+    Readonly<Record<"trenches" | "rank_1m" | "rank_5m", number>>
+  >;
   readonly sourceFresh: Readonly<Record<"trenches" | "rank_1m" | "rank_5m", boolean>>;
   readonly rank1mMissingSuccesses?: number;
 }

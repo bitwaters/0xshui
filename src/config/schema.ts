@@ -143,10 +143,15 @@ export const appConfigSchema = z
           .array(z.enum(["1m", "5m"]))
           .length(2)
           .refine(uniqueArray, { message: "rank.intervals must not contain duplicates" }),
-        filters: z
-          .array(z.enum(["not_honeypot", "verified", "renounced"]))
-          .length(3)
-          .refine(uniqueArray, { message: "rank.filters must not contain duplicates" }),
+        filters: z.union([
+          z.tuple([z.literal("not_honeypot")]),
+          // Historical config versions remain parseable for deterministic replay.
+          z.tuple([
+            z.literal("not_honeypot"),
+            z.literal("verified"),
+            z.literal("renounced"),
+          ]),
+        ]),
       })
       .strict(),
     risk_filters: z
@@ -196,13 +201,40 @@ export const appConfigSchema = z
         max_rank_5m: z.number().int().min(1).max(100),
       })
       .strict(),
+    mature_momentum: z
+      .object({
+        live_delivery: z.boolean(),
+        min_age: durationMsSchema,
+        min_liquidity: z.number().finite().positive(),
+        max_rank_1m: z.number().int().min(1).max(100),
+        max_rank_5m: z.number().int().min(1).max(100),
+        window: durationMsSchema,
+        min_rank_improvement: positiveIntegerSchema,
+        sustain_rank_1m: z.number().int().min(1).max(100),
+        max_rank_fallback: positiveIntegerSchema,
+        sample_target: z.number().int().min(1).max(1_000),
+      })
+      .strict()
+      .default({
+        live_delivery: false,
+        min_age: 3_600_000,
+        min_liquidity: 30_000,
+        max_rank_1m: 20,
+        max_rank_5m: 40,
+        window: 60_000,
+        min_rank_improvement: 3,
+        sustain_rank_1m: 10,
+        max_rank_fallback: 5,
+        sample_target: 30,
+      }),
     confirmation: z
       .object({
         max_rank_1m: z.number().int().min(1).max(100),
         max_rank_5m: z.number().int().min(1).max(100),
-        min_rank_1m_improvement: positiveIntegerSchema,
-        min_rank_5m_improvement: positiveIntegerSchema,
-        min_fresh_snapshots: z.number().int().min(2).max(10),
+        max_rank_1m_fallback: positiveIntegerSchema.default(5),
+        min_rank_1m_improvement: positiveIntegerSchema.optional(),
+        min_rank_5m_improvement: positiveIntegerSchema.optional(),
+        min_fresh_snapshots: z.number().int().min(2).max(10).optional(),
       })
       .strict(),
     cancel: z

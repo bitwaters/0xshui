@@ -11,9 +11,12 @@ export interface SignalCardModel {
   readonly symbol?: string;
   readonly lifecycle: "curve" | "graduated";
   readonly trigger: TriggerKind;
+  readonly signalType: "early" | "mature";
   readonly moveClass: MoveClass;
   readonly price?: number;
   readonly marketCap?: number;
+  readonly liquidity?: number;
+  readonly tokenAgeMs?: number;
   readonly rank1m?: number;
   readonly rank5m?: number;
   readonly confirmed: boolean;
@@ -56,6 +59,18 @@ function formatUsd(value: number): string {
   return `$${value.toLocaleString("en-US", { maximumSignificantDigits: 6 })}`;
 }
 
+function formatAge(value: number | undefined): string {
+  if (value === undefined) return "未知";
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError("tokenAgeMs must be a finite non-negative number");
+  }
+  const minutes = Math.floor(value / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 function triggerLabel(trigger: TriggerKind): string {
   switch (trigger) {
     case "curve_acceleration":
@@ -64,6 +79,8 @@ function triggerLabel(trigger: TriggerKind): string {
       return "1m 热榜突破";
     case "cross_source":
       return "双来源启动";
+    case "mature_momentum":
+      return "成熟双榜动量";
   }
 }
 
@@ -103,6 +120,7 @@ export function renderSignalCard(model: SignalCardModel): RenderedSignalCard {
   }
   const price = finiteNonNegative(model.price, "price");
   const marketCap = finiteNonNegative(model.marketCap, "marketCap");
+  const liquidity = finiteNonNegative(model.liquidity, "liquidity");
   for (const [field, rank] of [
     ["rank1m", model.rank1m],
     ["rank5m", model.rank5m],
@@ -112,10 +130,22 @@ export function renderSignalCard(model: SignalCardModel): RenderedSignalCard {
     }
   }
 
+  const highRisk =
+    model.moveClass === "observation_only" ||
+    model.moveClass === "fast_rise" ||
+    (liquidity ?? Infinity) < 5_000;
+  const title = model.confirmed
+    ? "趋势确认"
+    : model.signalType === "mature"
+      ? "BSC Mature Momentum"
+      : highRisk
+        ? "BSC High-Risk Watch"
+        : "BSC Early Signal";
   const lines = [
-    `${model.confirmed ? "🔥" : "⚡"} <b>${model.confirmed ? "趋势确认" : "BSC Early Signal"}</b>`,
+    `${model.confirmed ? "🔥" : highRisk ? "👀" : "⚡"} <b>${title}</b>`,
     `<b>${displayName(model)}</b>`,
     `阶段：${model.lifecycle === "curve" ? "Bonding Curve" : "已毕业 / DEX"}`,
+    `类型：${model.signalType === "mature" ? "成熟动量" : "早期启动"}`,
     `信号：${triggerLabel(model.trigger)}`,
   ];
   if (price !== undefined) {
@@ -124,6 +154,8 @@ export function renderSignalCard(model: SignalCardModel): RenderedSignalCard {
   if (marketCap !== undefined) {
     lines.push(`市值：${formatUsd(marketCap)}`);
   }
+  lines.push(`流动性：${liquidity === undefined ? "未知" : formatUsd(liquidity)}`);
+  lines.push(`年龄：${formatAge(model.tokenAgeMs)}`);
   const ranks = [
     model.rank1m === undefined ? null : `1m #${model.rank1m}`,
     model.rank5m === undefined ? null : `5m #${model.rank5m}`,
@@ -131,6 +163,9 @@ export function renderSignalCard(model: SignalCardModel): RenderedSignalCard {
   if (ranks.length > 0) {
     lines.push(`热度：${ranks.join(" · ")}`);
   }
+  lines.push(
+    `风险：${model.moveClass === "fast_rise" ? "快速拉升 / 高追涨风险" : highRisk ? "高风险观察" : "常规"}`,
+  );
   lines.push("安全：GMGN 风险检查通过");
   const movement = movementLine(model.moveClass);
   if (movement !== null) {

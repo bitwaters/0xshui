@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { loadAppConfig } from "../src/config/index.js";
 import { openDatabase, PersistenceRepository } from "../src/db/index.js";
-import type { RankToken, SecuritySnapshot, TrenchesToken } from "../src/gmgn/index.js";
+import type { PoolSnapshot, RankToken, SecuritySnapshot, TrenchesToken } from "../src/gmgn/index.js";
 import { createLogger } from "../src/logging/index.js";
 import {
   AcceptanceService,
@@ -15,7 +15,7 @@ import {
   MetricsService,
 } from "../src/operations/index.js";
 import { TokenWindowStore, WeightedRateLimiter } from "../src/realtime/index.js";
-import { SignalEngine } from "../src/runtime/index.js";
+import { SignalEngine, assessDeliveryLiquidity } from "../src/runtime/index.js";
 import { TelegramPublisher, type TelegramGateway } from "../src/telegram/index.js";
 
 const NOW = 1_787_614_000_000;
@@ -71,6 +71,20 @@ function security(): SecuritySnapshot {
     top10HolderRate: 0.2,
     lockPercent: 0.8,
     conflicts: [],
+  };
+}
+
+function pool(): PoolSnapshot {
+  return {
+    tokenKey: TOKEN,
+    address: TOKEN,
+    poolAddress: "0x3333333333333333333333333333333333333333",
+    quoteAddress: "0x4444444444444444444444444444444444444444",
+    exchange: "test",
+    liquidity: 20_000,
+    baseReserve: 1,
+    quoteReserve: 20_000,
+    creationTimestampMs: NOW - 60_000,
   };
 }
 
@@ -130,6 +144,9 @@ test("runtime engine reaches sent and confirms by editing the original message",
         getFreshForSend: async () => cached.snapshot,
         getCached: () => cached,
       },
+      pool: {
+        getFreshForSend: async () => ({ snapshot: pool(), capturedAt: NOW }),
+      },
       publisher,
       logger: createLogger({ level: "fatal" }),
       health,
@@ -165,12 +182,59 @@ test("runtime engine reaches sent and confirms by editing the original message",
     }
     windowStore.markSourceSuccess("rank_1m", NOW + 2_000);
     windowStore.markSourceSuccess("rank_5m", NOW + 2_000);
+    windowStore.replaceCurrentSource(
+      "rank_1m",
+      [{ tokenKey: TOKEN, data: rank1b.token }],
+      NOW + 2_000,
+    );
+    windowStore.replaceCurrentSource(
+      "rank_5m",
+      [{ tokenKey: TOKEN, data: { ...rank1b.token, interval: "5m", rank: 30 } }],
+      NOW + 2_000,
+    );
     await engine.processToken(TOKEN, NOW + 2_000);
     assert.equal(repository.getDeliveryTarget(TOKEN)?.state, "confirmed");
     assert.deepEqual(edits, [88]);
   } finally {
     database.close();
   }
+});
+
+test("delivery liquidity fails closed and classifies thin and curve evidence", () => {
+  const common = { now: NOW, maximumAgeMs: 10_000, curveSourceFresh: true } as const;
+  assert.deepEqual(
+    assessDeliveryLiquidity({ ...common, lifecycle: "graduated", pool: null }),
+    { ok: false, reason: "pool_liquidity_unavailable" },
+  );
+  assert.deepEqual(
+    assessDeliveryLiquidity({
+      ...common,
+      lifecycle: "graduated",
+      pool: { snapshot: { ...pool(), liquidity: 0 }, capturedAt: NOW },
+    }),
+    { ok: false, reason: "pool_liquidity_unavailable" },
+  );
+  assert.deepEqual(
+    assessDeliveryLiquidity({
+      ...common,
+      lifecycle: "graduated",
+      pool: { snapshot: { ...pool(), liquidity: 4_999 }, capturedAt: NOW },
+    }),
+    { ok: true, liquidity: 4_999, thin: true },
+  );
+  assert.deepEqual(
+    assessDeliveryLiquidity({ ...common, lifecycle: "curve", curveLiquidity: 5_000 }),
+    { ok: true, liquidity: 5_000, thin: false },
+  );
+  assert.deepEqual(
+    assessDeliveryLiquidity({
+      ...common,
+      lifecycle: "curve",
+      curveSourceFresh: false,
+      curveLiquidity: 5_000,
+    }),
+    { ok: false, reason: "curve_liquidity_unavailable" },
+  );
 });
 
 test("health readiness fails closed for each required dependency", () => {

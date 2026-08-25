@@ -94,6 +94,47 @@ test("token windows retain only 60 seconds and at most ten ordered events", () =
   assert.equal(store.getEvents("token", NOW + 80_000).length, 0);
 });
 
+test("current source state survives event expiry without manufacturing updates", () => {
+  const database = openDatabase({ path: ":memory:" });
+  try {
+    const repository = new PersistenceRepository(database);
+    const windowStore = new TokenWindowStore();
+    let now = NOW;
+    const coordinator = new SnapshotCoordinator({
+      repository,
+      windowStore,
+      now: () => now,
+    });
+    const token = rankToken();
+    coordinator.commitRank("rank_5m", [{ ...token, interval: "5m" }], now);
+
+    now += 61_000;
+    coordinator.commitRank("rank_5m", [{ ...token, interval: "5m" }], now);
+    assert.equal(windowStore.getEvents(token.tokenKey, now).length, 0);
+    assert.equal(windowStore.getCurrent<RankToken>(token.tokenKey, "rank_5m")?.rank, token.rank);
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM token_snapshots").get() as { count: number })
+        .count,
+      1,
+    );
+
+    now += 1_000;
+    coordinator.commitRank("rank_5m", [], now);
+    assert.equal(windowStore.getCurrent(token.tokenKey, "rank_5m"), undefined);
+    assert.equal(windowStore.getConsecutiveRankMisses(token.tokenKey, "rank_5m"), 1);
+
+    now += 1_000;
+    coordinator.commitRank("rank_5m", [], now);
+    assert.equal(windowStore.getConsecutiveRankMisses(token.tokenKey, "rank_5m"), 2);
+
+    now += 1_000;
+    coordinator.commitRank("rank_5m", [{ ...token, interval: "5m" }], now);
+    assert.equal(windowStore.getConsecutiveRankMisses(token.tokenKey, "rank_5m"), 0);
+  } finally {
+    database.close();
+  }
+});
+
 test("a failed snapshot transaction does not advance the in-memory baseline", () => {
   const database = openDatabase({ path: ":memory:" });
   try {

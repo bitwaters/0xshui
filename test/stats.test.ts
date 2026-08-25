@@ -138,9 +138,45 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
       { source: "cross_source", count: 1 },
       { source: "curve_acceleration", count: 1 },
       { source: "double_confirmation", count: 2 },
+      { source: "early_ordinary", count: 5 },
       { source: "fast_rank", count: 3 },
     ],
   );
+});
+
+test("statistics separate high-risk observations and render Mature sample progress", () => {
+  const formal = aggregateStatistics(
+    [row(1, { decision: { evidence: { trigger: "fast_rank" }, moveClass: "observation_only" } })],
+    NOW,
+  );
+  assert.equal(
+    formal.sources.find((source) => source.source === "high_risk_observation")?.signals,
+    1,
+  );
+  const mature = aggregateStatistics(
+    [
+      row(2, {
+        decision: { evidence: { trigger: "mature_momentum" }, moveClass: "normal" },
+        outcomes: [outcome(HOUR, "completed", { mfe: 0.3, mae: -0.05 })],
+      }),
+    ],
+    NOW,
+  );
+  const text = renderStatisticsCard(formal, "当前版本累计", true, {
+    sampled: 1,
+    target: 30,
+    statistics: mature,
+  }, {
+    lastSignalAgeMs: 90_000,
+    recentCandidates: 12,
+    recentStateCounts: { observing: 8, rejected: 2, cancelled: 1, suppressed: 1 },
+    sourceFailures: { trenches: 0, rank_1m: 1, rank_5m: 0 },
+  });
+  assert.ok(text.includes("高风险观察"));
+  assert.ok(text.includes("Mature 影子样本"));
+  assert.ok(text.includes("1/30 个有效 T+1h"));
+  assert.ok(text.includes("距最后信号：1分30秒"));
+  assert.ok(text.includes("数据源失败：Trenches 0 · 1m 1 · 5m 0"));
 });
 
 test("statistics card discloses samples, coverage, touch metrics, and disclaimer", () => {

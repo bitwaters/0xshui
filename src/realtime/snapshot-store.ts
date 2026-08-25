@@ -65,6 +65,12 @@ function trenchesPayload(token: TrenchesToken): Record<string, unknown> {
 export class TokenWindowStore {
   private readonly events = new Map<string, WindowEvent[]>();
   private readonly sourceSuccessAt = new Map<RealtimeSource, number>();
+  private readonly currentBySource = new Map<RealtimeSource, Map<string, unknown>>();
+  private readonly currentCapturedAt = new Map<RealtimeSource, number>();
+  private readonly consecutiveMissingByRankSource = new Map<
+    "rank_1m" | "rank_5m",
+    Map<string, number>
+  >();
 
   public constructor(
     private readonly retentionMs = 60_000,
@@ -85,6 +91,41 @@ export class TokenWindowStore {
 
   public markSourceSuccess(source: RealtimeSource, capturedAt: number): void {
     this.sourceSuccessAt.set(source, capturedAt);
+  }
+
+  public replaceCurrentSource(
+    source: RealtimeSource,
+    values: readonly { readonly tokenKey: string; readonly data: unknown }[],
+    capturedAt: number,
+  ): void {
+    const next = new Map(values.map((value) => [value.tokenKey, value.data]));
+    const previous = this.currentBySource.get(source);
+    if (source === "rank_1m" || source === "rank_5m") {
+      const missing = this.consecutiveMissingByRankSource.get(source) ?? new Map<string, number>();
+      const tracked = new Set([...(previous?.keys() ?? []), ...missing.keys()]);
+      for (const tokenKey of tracked) {
+        if (next.has(tokenKey)) missing.delete(tokenKey);
+        else missing.set(tokenKey, (missing.get(tokenKey) ?? 0) + 1);
+      }
+      this.consecutiveMissingByRankSource.set(source, missing);
+    }
+    this.currentBySource.set(source, next);
+    this.currentCapturedAt.set(source, capturedAt);
+  }
+
+  public getCurrent<T>(tokenKey: string, source: RealtimeSource): T | undefined {
+    return this.currentBySource.get(source)?.get(tokenKey) as T | undefined;
+  }
+
+  public getCurrentCapturedAt(source: RealtimeSource): number | undefined {
+    return this.currentCapturedAt.get(source);
+  }
+
+  public getConsecutiveRankMisses(
+    tokenKey: string,
+    source: "rank_1m" | "rank_5m",
+  ): number {
+    return this.consecutiveMissingByRankSource.get(source)?.get(tokenKey) ?? 0;
   }
 
   public isSourceFresh(source: RealtimeSource, now: number): boolean {
@@ -178,6 +219,11 @@ export class SnapshotCoordinator {
       const baselineSeq = this.options.repository.appendSourceBatch(source, baselineEvents);
       this.recordPersisted(source, baselineEvents);
       this.baselines.set(source, next);
+      this.options.windowStore.replaceCurrentSource(
+        source,
+        [...next.entries()].map(([tokenKey, state]) => ({ tokenKey, data: state.payload })),
+        capturedAt,
+      );
       this.options.windowStore.markSourceSuccess(source, capturedAt);
       if (baselineSeq !== null) {
         for (const event of baselineEvents) {
@@ -218,6 +264,11 @@ export class SnapshotCoordinator {
     const ingestSeq = this.options.repository.appendSourceBatch(source, persistedEvents);
     this.recordPersisted(source, persistedEvents);
     this.baselines.set(source, next);
+    this.options.windowStore.replaceCurrentSource(
+      source,
+      [...next.entries()].map(([tokenKey, state]) => ({ tokenKey, data: state.payload })),
+      capturedAt,
+    );
     this.options.windowStore.markSourceSuccess(source, capturedAt);
     if (ingestSeq === null) {
       return null;
@@ -276,7 +327,7 @@ export class SnapshotCoordinator {
       sourceCapturedAt,
       samplingLevel,
       payload,
-      upstreamFilterVersion: "gmgn-safe-v1",
+      upstreamFilterVersion: "gmgn-not-honeypot-v2",
       adapterVersion: "gmgn-adapter-v1",
     };
   }

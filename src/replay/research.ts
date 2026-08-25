@@ -16,6 +16,7 @@ export interface ResearchFeature {
   readonly market: DetectorMarket;
   readonly security: SecurityObservation;
   readonly discovery: DiscoveryReference;
+  readonly researchKind?: "general" | "mature";
 }
 
 export interface BuiltResearchSample {
@@ -28,7 +29,10 @@ function latestValue<T>(values: readonly { readonly value: T | null }[]): T | un
   return [...values].reverse().find((item) => item.value !== null)?.value ?? undefined;
 }
 
-export function buildResearchSample(input: DetectorInput): BuiltResearchSample | null {
+export function buildResearchSample(
+  input: DetectorInput,
+  researchKind: "general" | "mature" = "general",
+): BuiltResearchSample | null {
   if (input.security === undefined) return null;
   const trench = latestValue(input.market.trenches);
   const rank1 = latestValue(input.market.rank1m);
@@ -48,6 +52,7 @@ export function buildResearchSample(input: DetectorInput): BuiltResearchSample |
       market: input.market,
       security: input.security,
       discovery: input.discovery,
+      researchKind,
     },
   };
 }
@@ -72,12 +77,18 @@ export function evaluateResearchFeature(
   ) {
     throw new Error("Incomplete research feature payload");
   }
+  const evaluationConfig: AppConfig = feature.researchKind === "mature"
+    ? {
+        ...config,
+        mature_momentum: { ...config.mature_momentum, live_delivery: true },
+      }
+    : config;
   return evaluateDetector({
     version: DETECTOR_VERSION,
     tokenKey: feature.tokenKey,
     now: feature.sampledAt,
     configVersion,
-    config,
+    config: evaluationConfig,
     state: "observing",
     market: feature.market,
     security: feature.security,

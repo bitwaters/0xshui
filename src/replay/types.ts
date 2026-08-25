@@ -1,11 +1,12 @@
 import type { SignalStatistics } from "../stats/index.js";
+import type { TriggerKind } from "../detection/index.js";
 
 export interface ReplaySignal {
   readonly tokenKey: string;
   readonly qualifiedAt: number;
   readonly discoveredAt: number;
   readonly lifecycle: "curve" | "graduated";
-  readonly trigger: "curve_acceleration" | "fast_rank" | "cross_source";
+  readonly trigger: TriggerKind;
   readonly priority: "normal" | "high";
   readonly moveClass: string;
 }

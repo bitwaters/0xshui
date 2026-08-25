@@ -5,6 +5,7 @@ import { bootstrapApplication } from "./bootstrap.js";
 import { ConfigLoadError, CredentialError } from "./config/index.js";
 import { runDatabaseMaintenance, type SqliteDatabase } from "./db/index.js";
 import {
+  adaptPool,
   GmgnContractError,
   GmgnError,
   getGmgnHttpClient,
@@ -136,6 +137,7 @@ async function run(): Promise<void> {
       repository: context.repository,
       timeZone: context.config.report_timezone,
       configVersion: context.configVersion,
+      matureSampleTarget: context.config.mature_momentum.sample_target,
     });
     const metrics = new MetricsService(context.repository);
     const acceptance = new AcceptanceService(
@@ -212,6 +214,13 @@ async function run(): Promise<void> {
       repository: context.repository,
       windowStore,
       security: securityManager,
+      pool: {
+        getFreshForSend: async (tokenKey) => {
+          const raw = await client.fetchPool(tokenKey);
+          const snapshot = adaptPool(raw.data);
+          return { snapshot, capturedAt: raw.receivedAt };
+        },
+      },
       ...(publisher === undefined ? {} : { publisher }),
       logger: context.logger,
       health,
@@ -228,6 +237,7 @@ async function run(): Promise<void> {
       sources: createMarketPollers({
         client,
         coordinator,
+        rankLimit: context.config.rank.limit,
         onSuccess: (source, capturedAt) => {
           health.markHealthy("storage", capturedAt);
           successfulSources.add(source);
@@ -242,18 +252,37 @@ async function run(): Promise<void> {
           context.logger.debug("poll_completed", { source, captured_at: capturedAt });
         },
         onFailure: (source, error) => {
+          const now = Date.now();
+          try {
+            const key = `poll_failures_current_hour:${source}`;
+            const hour = Math.floor(now / (60 * 60_000));
+            const current = context.repository.getRuntimeState<{
+              readonly hour: number;
+              readonly count: number;
+            }>(key);
+            context.repository.setRuntimeState(
+              key,
+              { hour, count: current?.hour === hour ? current.count + 1 : 1 },
+              now,
+            );
+          } catch (diagnosticError) {
+            context.logger.error("storage_failed", diagnosticError, {
+              source,
+              phase: "poll_failure_diagnostic",
+            });
+          }
           if (isStorageError(error)) {
-            health.markFailed("storage", Date.now());
+            health.markFailed("storage", now);
             context.logger.error("storage_failed", error, { source });
           } else {
-            health.markDegraded("gmgn", Date.now());
+            health.markDegraded("gmgn", now);
             if (error instanceof GmgnContractError || !(error instanceof GmgnError)) {
               context.repository.incrementRuntimeCounter("schema_failure_count");
-              context.repository.setRuntimeState("last_schema_failure_at", Date.now());
+              context.repository.setRuntimeState("last_schema_failure_at", now);
               context.repository.incrementRuntimeCounter(`schema_failure_count:${acceptanceKey}`);
               context.repository.setRuntimeState(
                 `last_schema_failure_at:${acceptanceKey}`,
-                Date.now(),
+                now,
               );
               context.logger.error("schema_contract_failed", error, { source });
             }

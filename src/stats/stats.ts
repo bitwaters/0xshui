@@ -3,7 +3,12 @@ import type { StatisticsSignalRow } from "../db/index.js";
 const FIFTEEN_MINUTES = 15 * 60_000;
 const ONE_HOUR = 60 * 60_000;
 const KNOWN_OUTCOME_STATES = new Set(["completed", "no_trade", "pool_removed"]);
-const KNOWN_TRIGGERS = new Set(["curve_acceleration", "fast_rank", "cross_source"]);
+const KNOWN_TRIGGERS = new Set([
+  "curve_acceleration",
+  "fast_rank",
+  "cross_source",
+  "mature_momentum",
+]);
 
 export const TARGET_MULTIPLES = [1.2, 1.5, 2, 3, 5] as const;
 export type TargetMultiple = (typeof TARGET_MULTIPLES)[number];
@@ -150,6 +155,14 @@ function triggerOf(decision: unknown): string {
   return "unknown";
 }
 
+function moveClassOf(decision: unknown): string {
+  if (typeof decision !== "object" || decision === null || Array.isArray(decision)) {
+    return "unknown";
+  }
+  const value = (decision as Record<string, unknown>).moveClass;
+  return typeof value === "string" ? value : "unknown";
+}
+
 function outcomeAt(signal: StatisticsSignalRow, checkpointMs: number) {
   return signal.outcomes.find((outcome) => outcome.checkpointMs === checkpointMs);
 }
@@ -201,6 +214,15 @@ export function aggregateStatistics(
   for (const signal of signals) {
     const trigger = triggerOf(signal.decision);
     bySource.set(trigger, [...(bySource.get(trigger) ?? []), signal]);
+    const moveClass = moveClassOf(signal.decision);
+    const category = trigger === "mature_momentum"
+      ? "mature_momentum"
+      : moveClass === "fast_rise" || moveClass === "observation_only"
+        ? "high_risk_observation"
+        : "early_ordinary";
+    if (category !== trigger) {
+      bySource.set(category, [...(bySource.get(category) ?? []), signal]);
+    }
     if (signal.state === "confirmed") {
       bySource.set("double_confirmation", [
         ...(bySource.get("double_confirmation") ?? []),

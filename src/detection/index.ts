@@ -1,6 +1,7 @@
 export {
   canTransitionSignalState,
   classifyMove,
+  detectMatureTrigger,
   detectTrigger,
   evaluateDetector,
   passesResearchSafety,
