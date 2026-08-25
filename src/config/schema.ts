@@ -118,7 +118,7 @@ export const appConfigSchema = z
         request_timeout: durationMsSchema,
         network_retry: z.literal(1),
         max_response_size: byteSizeSchema,
-        local_weight_limit_per_second: z.number().int().min(5).max(20),
+        local_weight_limit_per_second: z.number().int().min(4).max(20),
         security_cache: durationMsSchema,
         security_max_age_at_send: durationMsSchema,
         security_max_concurrency: z.number().int().min(1).max(10),

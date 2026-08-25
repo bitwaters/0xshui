@@ -294,7 +294,7 @@ Trenches       weight 3 / 2秒
 本地统一限速设置为：
 
 ```text
-5 weight/秒
+4 weight/秒
 ```
 
 剩余容量用于 Token Security 和低频结果采集。Security 最大并发为 3，但所有请求仍受同一限速器和 429 全局冷却控制。
@@ -1286,7 +1286,7 @@ gmgn:
   request_timeout: 5s
   network_retry: 1
   max_response_size: 10MB
-  local_weight_limit_per_second: 5
+  local_weight_limit_per_second: 4
   security_cache: 60s
   security_max_age_at_send: 10s
   security_max_concurrency: 3

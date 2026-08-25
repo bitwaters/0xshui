@@ -79,7 +79,7 @@
 - **THEN** 系统不发送正式信号，并抑制该代币的重复非紧急预热，但仍允许后续发送前紧急刷新
 
 ### Requirement: Rate-limit and failure control
-系统 SHALL 使用全局加权限速，固定轮转的基础实时轮询目标负载为 1 request/s、平均 weight 2/s，本地总上限为 weight 5/s，原始请求和重试均消耗预算。单请求 SHALL 在 5 秒超时；收到 429 后 SHALL 暂停全部 GMGN 请求，优先采用有效的未来 `X-RateLimit-Reset`、其次采用有效的未来 `reset_at`，并在有效 reset 后增加 1 秒安全缓冲；两者均缺失或非法时使用 5 分钟冷却。`cooldown_until` SHALL 持久化并在服务重启后继续生效，且冷却期间不得主动请求 GMGN。
+系统 SHALL 使用全局加权限速，固定轮转的基础实时轮询目标负载为 1 request/s、平均 weight 2/s，本地总上限为 weight 4/s，原始请求和重试均消耗预算。单请求 SHALL 在 5 秒超时；收到 429 后 SHALL 暂停全部 GMGN 请求，优先采用有效的未来 `X-RateLimit-Reset`、其次采用有效的未来 `reset_at`，并在有效 reset 后增加 1 秒安全缓冲；两者均缺失或非法时使用 5 分钟冷却。`cooldown_until` SHALL 持久化并在服务重启后继续生效，且冷却期间不得主动请求 GMGN。
 
 #### Scenario: GMGN responds with 429
 - **WHEN** 任一 GMGN 请求收到 429

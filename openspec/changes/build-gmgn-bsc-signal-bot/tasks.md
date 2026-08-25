@@ -28,7 +28,7 @@
 ## 4. Realtime Scheduling and Snapshots
 
 - [x] 4.1 Implement the 1-second fixed source rotation with independent in-flight guards for Trenches, 1m Rank, and 5m Rank
-- [x] 4.2 Implement the shared weighted limiter at 5 weight/s, charge retries, persist buffered 429 cooldown_until with a 5-minute invalid/missing-reset fallback, and stage recovery across realtime, Security, and offline priorities
+- [x] 4.2 Implement the shared weighted limiter at 4 weight/s, charge retries, persist buffered 429 cooldown_until with a 5-minute invalid/missing-reset fallback, and stage recovery across realtime, Security, and offline priorities
 - [x] 4.3 Implement per-source startup baselines and successful-response diffing into atomic enter/update/exit batches without creating exit events for failed polls
 - [x] 4.4 Implement the per-token in-memory 60-second/10-snapshot window, 10-second source freshness checks, and rank-null-as-101 behavior
 - [x] 4.5 Implement candidate-scoped Security preheating, concurrency control, 60-second cache, 10-second send-age refresh, and cold-start protection
