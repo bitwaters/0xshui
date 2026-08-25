@@ -58,6 +58,7 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
           mfe: 1.5,
           mae: -0.2,
           timeTo2xMs: 120_000,
+          poolRemoved: true,
           graduation: "graduated",
         }),
       ],
@@ -121,7 +122,7 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
   assert.equal(stats.medianTimeTo2xMs, 120_000);
   assert.equal(stats.timeTo2xSamples, 1);
   assert.equal(stats.noTradeRate, 1 / 3);
-  assert.equal(stats.confirmedPoolRemovalRate, 1 / 3);
+  assert.equal(stats.confirmedPoolRemovalRate, 2 / 3);
   assert.equal(stats.medianReturn15m, 0);
   assert.equal(stats.medianMfe15, 0);
   assert.equal(stats.medianMae15, -0.1);

@@ -267,6 +267,30 @@ test("empty Kline needs corroboration for no_trade and pool_removed", async () =
   }
 });
 
+test("a graduated token can retain a multiple hit and also confirm later pool removal", async () => {
+  const { database, repository } = setupSent();
+  try {
+    repository.savePoolBaseline(TOKEN, pool(), NOW);
+    const first = Math.ceil(NOW / 30_000) * 30_000;
+    const candles = Array.from({ length: 120 }, (_, index) =>
+      candle(first + index * 30_000, 1, 2.5, 0.5),
+    );
+    const worker = new OutcomeWorker({
+      repository,
+      dataSource: dataSource(candles, { status: "missing", hasAlternativePool: false }),
+      now: () => NOW + HOUR,
+    });
+    assert.equal(await worker.runDue(), 2);
+    const row = outcomeRow(database, HOUR);
+    const result = JSON.parse(row.result_json ?? "{}") as Record<string, unknown>;
+    assert.equal(row.state, "completed");
+    assert.equal(result.mfe, 1.5);
+    assert.equal(result.poolRemoved, true);
+  } finally {
+    database.close();
+  }
+});
+
 test("curve no_trade requires fresh snapshots on both sides with unchanged swaps", async () => {
   const { database, repository } = setupSent("curve");
   try {

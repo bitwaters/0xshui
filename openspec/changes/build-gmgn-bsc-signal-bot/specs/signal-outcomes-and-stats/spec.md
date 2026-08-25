@@ -48,6 +48,10 @@
 - **WHEN** 已毕业信号满足全部撤池证据且无替代池
 - **THEN** 系统标记 `pool_removed`、按失败计入并记录 -100% 收益
 
+#### Scenario: Token reaches a multiple before its pool disappears
+- **WHEN** 已毕业信号在 T+1h 前有历史 Kline 证明达到目标倍数，且 T+1h Pool 复查确认发送时记录的池已移除且无替代池
+- **THEN** 系统保留历史倍数命中，同时将该信号计入已确认撤池统计
+
 #### Scenario: Curve token has no pool
 - **WHEN** 未毕业曲线代币的 Kline 和 DEX Pool 均不存在
 - **THEN** 系统不据此判定撤池

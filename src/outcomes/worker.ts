@@ -249,11 +249,16 @@ export class OutcomeWorker {
                 job.tokenKey,
               ).graduation
             : undefined;
+        const poolRemoved = await this.confirmCompletedPoolRemoval(job);
         this.complete(
           job,
           "completed",
           attempt,
-          graduation === undefined ? result : { ...result, graduation },
+          {
+            ...result,
+            ...(graduation === undefined ? {} : { graduation }),
+            ...(poolRemoved === undefined ? {} : { poolRemoved }),
+          },
           now,
         );
         return;
@@ -312,6 +317,25 @@ export class OutcomeWorker {
       this.retryOrComplete(job, attempt, "api_missing", "curve_evidence_missing", now);
     } catch {
       this.retryOrComplete(job, attempt, "retry_exhausted", "market_api_failed", now);
+    }
+  }
+
+  private async confirmCompletedPoolRemoval(job: WorkerJob): Promise<boolean | undefined> {
+    if (
+      job.lifecycle !== "graduated" ||
+      job.checkpointMs !== 60 * 60_000 ||
+      !isPoolSnapshot(job.poolBaseline)
+    ) {
+      return undefined;
+    }
+    try {
+      const pool = await this.options.dataSource.fetchPool(job.tokenKey);
+      if (pool.status === "found" && pool.pool.tokenKey !== job.tokenKey) {
+        return undefined;
+      }
+      return terminalPoolState(job.poolBaseline, pool) === "pool_removed";
+    } catch {
+      return undefined;
     }
   }
 

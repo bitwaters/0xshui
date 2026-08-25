@@ -15,6 +15,7 @@ export interface CalculatedOutcome {
   readonly mfe: number;
   readonly mae: number;
   readonly timeTo2xMs?: number;
+  readonly poolRemoved?: boolean;
   readonly candleCount: number;
   readonly graduation?: GraduationStatus;
 }

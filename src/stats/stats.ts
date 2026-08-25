@@ -72,6 +72,7 @@ interface ParsedResult {
   readonly mfe?: number;
   readonly mae?: number;
   readonly timeTo2xMs?: number;
+  readonly poolRemoved?: boolean;
   readonly graduation?: "graduated" | "not_graduated" | "unknown";
 }
 
@@ -93,6 +94,7 @@ function parseResult(value: unknown): ParsedResult {
   const mfe = finiteField(record, "mfe");
   const mae = finiteField(record, "mae");
   const timeTo2xMs = finiteField(record, "timeTo2xMs");
+  const poolRemoved = record.poolRemoved;
   return {
     ...(return1m === undefined ? {} : { return1m }),
     ...(return5m === undefined ? {} : { return5m }),
@@ -101,6 +103,7 @@ function parseResult(value: unknown): ParsedResult {
     ...(mfe === undefined ? {} : { mfe }),
     ...(mae === undefined ? {} : { mae }),
     ...(timeTo2xMs === undefined || timeTo2xMs < 0 ? {} : { timeTo2xMs }),
+    ...(typeof poolRemoved === "boolean" ? { poolRemoved } : {}),
     ...(graduation === "graduated" ||
     graduation === "not_graduated" ||
     graduation === "unknown"
@@ -225,9 +228,11 @@ export function aggregateStatistics(
       due1h += 1;
       if (outcome1h !== undefined && KNOWN_OUTCOME_STATES.has(outcome1h.state)) {
         evaluated1h += 1;
-        if (outcome1h.state === "pool_removed") confirmedPoolRemovals += 1;
         if (outcome1h.state === "no_trade") noTradeSamples += 1;
         const result = parseResult(outcome1h.result);
+        if (outcome1h.state === "pool_removed" || result.poolRemoved === true) {
+          confirmedPoolRemovals += 1;
+        }
         const peak = peakMultiple(result);
         if (peak !== undefined) peakMultiples.push(peak);
         if (
