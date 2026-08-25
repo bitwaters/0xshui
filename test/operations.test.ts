@@ -201,6 +201,23 @@ test("health readiness fails closed for each required dependency", () => {
   assert.equal(health.snapshot(NOW + 11_000).alive, false);
 });
 
+test("isolated token Security failures degrade health while a consecutive outage fails it", () => {
+  const health = new HealthMonitor(false);
+  health.markHealthy("storage", NOW);
+  health.markHealthy("gmgn", NOW);
+  health.markHealthy("telegram", NOW);
+  health.recordSecurityResult(false, NOW);
+  assert.equal(health.snapshot(NOW).components.security, "degraded");
+  assert.equal(health.snapshot(NOW).ready, true);
+  health.recordSecurityResult(false, NOW + 1);
+  health.recordSecurityResult(false, NOW + 2);
+  assert.equal(health.snapshot(NOW + 2).components.security, "failed");
+  assert.equal(health.snapshot(NOW + 2).ready, false);
+  health.recordSecurityResult(true, NOW + 3);
+  assert.equal(health.snapshot(NOW + 3).components.security, "healthy");
+  assert.equal(health.snapshot(NOW + 3).ready, true);
+});
+
 test("acceptance reports sample progress without treating elapsed time as a gate", () => {
   const database = openDatabase({ path: ":memory:" });
   try {

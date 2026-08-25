@@ -15,6 +15,7 @@ interface ComponentState {
 export class HealthMonitor {
   private alive = true;
   private readonly states = new Map<ComponentName, ComponentState>();
+  private consecutiveSecurityFailures = 0;
 
   public constructor(
     private readonly telegramRequired: boolean,
@@ -31,6 +32,17 @@ export class HealthMonitor {
 
   public markFailed(component: ComponentName, now: number): void {
     this.states.set(component, { status: "failed", updatedAt: now });
+  }
+
+  public recordSecurityResult(success: boolean, now: number): void {
+    if (success) {
+      this.consecutiveSecurityFailures = 0;
+      this.markHealthy("security", now);
+      return;
+    }
+    this.consecutiveSecurityFailures += 1;
+    if (this.consecutiveSecurityFailures >= 3) this.markFailed("security", now);
+    else this.markDegraded("security", now);
   }
 
   public stop(): void {

@@ -183,8 +183,7 @@ async function run(): Promise<void> {
       cacheTtlMs: context.config.gmgn.security_cache,
       sendMaximumAgeMs: context.config.gmgn.security_max_age_at_send,
       onCompleted: async (tokenKey, snapshot, capturedAt) => {
-        if (snapshot === null) health.markFailed("security", capturedAt);
-        else health.markHealthy("security", capturedAt);
+        health.recordSecurityResult(snapshot !== null, capturedAt);
         try {
           await engineRef.current?.processToken(tokenKey, capturedAt);
         } catch (error) {

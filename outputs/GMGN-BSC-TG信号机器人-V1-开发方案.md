@@ -1491,6 +1491,7 @@ V1 不要求建设 Dashboard，结构化日志和 `/stats detail` 足够。后�
 - Telegram 模糊发送结果进入 `delivery_unknown` 且不会自动重试。
 - 同代币确认时编辑原消息。
 - Security 失败不会误推。
+- 单个代币 Security 契约失败按候选失败关闭并标记 degraded；连续 3 次失败才将 Security 依赖标记为 failed，任一成功立即恢复。
 - 正式发送使用的 Security 年龄不超过 10 秒。
 - 全局限频与创建者限频可回算验证。
 - `/stats` 不把待评估信号计入失败。
