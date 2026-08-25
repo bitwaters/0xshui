@@ -1,0 +1,43 @@
+{
+  "code": 0,
+  "data": {
+    "new_creation": [
+      {
+        "address": "0x1111111111111111111111111111111111111111",
+        "price": 0.00001,
+        "holder_count": 20,
+        "swaps_24h": 30,
+        "net_buy_24h": 500,
+        "progress": 0.2,
+        "bundler_rate": 0.05,
+        "suspected_insider_hold_rate": 0.03,
+        "dev_team_hold_rate": 0.04,
+        "creator_balance_rate": 0.05
+      }
+    ],
+    "near_completion": [
+      {
+        "address": "0x2222222222222222222222222222222222222222",
+        "price": "0.00002",
+        "holder_count": "40",
+        "swaps_24h": "80",
+        "net_buy_24h": "900",
+        "launchpad_progress": "0.91",
+        "bundler_trader_amount_rate": "0.04",
+        "insider_ratio": "0.02",
+        "dev_team_hold_rate": "0.03",
+        "creator_balance_rate": "0.04"
+      }
+    ],
+    "completed": [
+      {
+        "address": "0x3333333333333333333333333333333333333333",
+        "price": 0.00003,
+        "holder_count": 90,
+        "swaps_24h": 200,
+        "net_buy_24h": 1200,
+        "progress": 1
+      }
+    ]
+  }
+}

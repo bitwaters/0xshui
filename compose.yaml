@@ -1,0 +1,25 @@
+name: 0xshui
+
+services:
+  bot:
+    image: 0xshui-bot:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      pull: true
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    env_file:
+      - .env
+    environment:
+      APP_CONFIG_PATH: /app/config/default.yaml
+      TELEGRAM_ENABLED: "true"
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - signal-data:/app/data
+
+volumes:
+  signal-data:

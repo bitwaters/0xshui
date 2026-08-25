@@ -1,0 +1,46 @@
+{
+  "code": 0,
+  "data": {
+    "code": 0,
+    "data": {
+      "rank": [
+        {
+          "chain": "bsc",
+          "address": "0x1111111111111111111111111111111111111111",
+          "name": "Fixture Token",
+          "symbol": "FIX",
+          "creator": "0x2222222222222222222222222222222222222222",
+          "launchpad_platform": "fourmeme",
+          "price": 0.00012,
+          "market_cap": 120000,
+          "liquidity": 25000,
+          "swaps": 80,
+          "buys": 55,
+          "sells": 25,
+          "holder_count": 420,
+          "smart_degen_count": 8,
+          "top_10_holder_rate": 0.22,
+          "rug_ratio": 0.08,
+          "bundler_rate": 0.05,
+          "suspected_insider_hold_rate": 0.03,
+          "rat_trader_amount_rate": 0.01,
+          "entrapment_ratio": 0.02,
+          "dev_team_hold_rate": 0.04,
+          "creator_balance_rate": 0.05,
+          "is_wash_trading": false,
+          "is_honeypot": 0,
+          "is_open_source": 1,
+          "is_renounced": 1,
+          "buy_tax": "0.01",
+          "sell_tax": "0.02",
+          "lock_percent": "0.95",
+          "burn_status": "yes",
+          "creation_timestamp": 1787610000,
+          "rank": 1
+        }
+      ]
+    },
+    "message": "success"
+  },
+  "message": "success"
+}

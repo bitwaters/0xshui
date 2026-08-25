@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "data": {
+    "new_creation": [],
+    "pump": [
+      {
+        "address": "0x2222222222222222222222222222222222222222",
+        "price": 0.00002,
+        "holder_count": 40,
+        "swaps_24h": 80,
+        "net_buy_24h": 900,
+        "progress": 0.91
+      }
+    ],
+    "completed": []
+  }
+}

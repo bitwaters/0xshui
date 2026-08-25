@@ -1,0 +1,117 @@
+chain: bsc
+mode: shadow
+poll_interval: 1s
+report_timezone: Asia/Shanghai
+
+logging:
+  level: info
+
+telegram:
+  enabled: false
+  daily_report: true
+
+gmgn:
+  transport: direct_http
+  base_url: https://openapi.gmgn.ai
+  user_agent: gmgn-bsc-signal-bot/0.1.0
+  request_timeout: 5s
+  network_retry: 1
+  max_response_size: 10MB
+  local_weight_limit_per_second: 10
+  security_cache: 60s
+  security_max_age_at_send: 10s
+  security_max_concurrency: 3
+  source_max_age_for_trigger: 10s
+
+trenches:
+  limit_per_stage: 80
+  types:
+    - new_creation
+    - near_completion
+    - completed
+  filter_preset: safe
+
+rank:
+  limit: 100
+  security_preheat_rank_1m: 30
+  intervals:
+    - 1m
+    - 5m
+  filters:
+    - not_honeypot
+    - verified
+    - renounced
+
+risk_filters:
+  max_rug: 0.30
+  max_bundler: 0.30
+  max_insider: 0.30
+  max_rat_trader: 0.30
+  max_entrapment: 0.30
+  max_dev_hold: 0.15
+  max_creator_hold: 0.15
+  max_top10: 0.50
+  max_buy_tax: 0.10
+  max_sell_tax: 0.10
+
+curve_preheat:
+  min_curve_swaps_total: 10
+  min_holders: 10
+  require_positive_curve_net_buy_total: true
+
+curve_trigger:
+  window: 15s
+  min_curve_swaps_total: 20
+  min_holders: 20
+  min_progress_growth: 0.02
+  min_holder_growth: 3
+  min_curve_swap_growth: 10
+  require_positive_curve_net_buy_growth: true
+
+fast_rank_trigger:
+  window: 10s
+  max_rank_1m: 10
+  min_rank_improvement: 15
+  min_fresh_snapshots: 2
+
+cross_source_trigger:
+  max_rank_1m: 30
+  min_rank_improvement: 10
+  max_rank_5m: 80
+
+confirmation:
+  max_rank_1m: 30
+  max_rank_5m: 50
+  min_rank_1m_improvement: 5
+  min_rank_5m_improvement: 3
+  min_fresh_snapshots: 2
+
+cancel:
+  rank_fallback: 15
+  swap_drop: 0.40
+  missing_rank_snapshots: 2
+
+noise:
+  max_initial_signals_per_minute: 3
+  max_normal_signals_per_minute: 2
+  reserved_high_priority_slots: 1
+  creator_cooldown: 30m
+  one_message_per_token: true
+  edit_message_on_confirmation: true
+
+outcomes:
+  checkpoints:
+    - 15m
+    - 1h
+  hit_window: 15m
+  hit_gain: 0.30
+  large_gain_window: 1h
+  large_gain: 1.00
+
+storage:
+  sqlite_path: data/signals.sqlite
+  snapshot_retention: 14d
+  signal_retention: 180d
+  baseline_snapshot_interval: 5s
+  sqlite_soft_limit: 5GB
+  incremental_vacuum: true

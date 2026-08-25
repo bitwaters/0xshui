@@ -1,0 +1,6 @@
+{
+  "code": 429,
+  "error": "RATE_LIMIT_BANNED",
+  "message": "rate limit active",
+  "reset_at": 1787615000
+}

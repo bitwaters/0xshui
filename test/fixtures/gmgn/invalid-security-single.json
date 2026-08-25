@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "data": {
+    "address": "",
+    "is_open_source": null,
+    "open_source": 0,
+    "is_honeypot": null,
+    "honeypot": 0,
+    "is_renounced": null,
+    "renounced": null,
+    "buy_tax": "",
+    "sell_tax": "",
+    "top_10_holder_rate": ""
+  },
+  "message": "success"
+}

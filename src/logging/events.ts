@@ -1,0 +1,28 @@
+export const OPERATIONAL_EVENTS = [
+  "app_started",
+  "app_stopped",
+  "startup_failed",
+  "config_loaded",
+  "poll_started",
+  "poll_completed",
+  "poll_skipped_overlap",
+  "schema_contract_failed",
+  "candidate_created",
+  "security_started",
+  "security_completed",
+  "security_failed",
+  "security_conflict",
+  "candidate_rejected",
+  "candidate_cancelled",
+  "signal_sent",
+  "signal_updated",
+  "signal_suppressed",
+  "outcome_collected",
+  "stats_generated",
+  "rate_limit_paused",
+  "rate_limit_resumed",
+  "storage_failed",
+  "delivery_unknown",
+] as const;
+
+export type OperationalEvent = (typeof OPERATIONAL_EVENTS)[number];
