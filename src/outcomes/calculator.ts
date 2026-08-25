@@ -61,6 +61,19 @@ export function calculateOutcome(
     ...interim.map((item) => item.price),
     ...eligibleCandles.map((candle) => candle.low),
   ];
+  const doublePrice = sentPrice * 2;
+  const firstRealtimeDouble = [...interim]
+    .sort((left, right) => left.capturedAt - right.capturedAt)
+    .find((item) => item.price >= doublePrice)?.capturedAt;
+  const firstCandleDouble = eligibleCandles.find(
+    (candle) => candle.high >= doublePrice,
+  )?.timeMs;
+  const doubleTouches = [
+    ...(firstRealtimeDouble === undefined ? [] : [firstRealtimeDouble - sentAt]),
+    ...(firstCandleDouble === undefined
+      ? []
+      : [firstCandleDouble + CANDLE_MS - sentAt]),
+  ];
   const returns: Partial<Record<(typeof PERIODS)[number][0], number>> = {};
   for (const [field, duration] of PERIODS) {
     if (duration > checkpointMs) {
@@ -78,6 +91,7 @@ export function calculateOutcome(
     ...returns,
     mfe: returnFrom(Math.max(...highPrices), sentPrice),
     mae: returnFrom(Math.min(...lowPrices), sentPrice),
+    ...(doubleTouches.length === 0 ? {} : { timeTo2xMs: Math.min(...doubleTouches) }),
     candleCount: eligibleCandles.length,
   };
 }

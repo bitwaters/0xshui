@@ -52,15 +52,15 @@
 - **WHEN** 未毕业曲线代币的 Kline 和 DEX Pool 均不存在
 - **THEN** 系统不据此判定撤池
 
-### Requirement: Hit-rate definitions
-系统 SHALL 将“15 分钟内最高涨幅≥30%”定义为 15m 命中，将“1 小时内最高涨幅≥100%”定义为 1h 大涨。尚未到期和数据未知样本 MUST NOT 进入命中率分母；`no_trade` 和 `pool_removed` SHALL 进入失败样本。只有 `sent` 和 `confirmed` 信号进入推送数和结果统计；`delivery_unknown` 只进入运维失败指标。
+### Requirement: Multiple-based hit-rate definitions
+系统 SHALL 以信号发送时 `sent_price=1.0x` 为基准，将完整 1 小时观察窗口内最高价是否达到 1.2x、1.5x、2x、3x 和 5x 作为主要命中率。尚未到期和数据未知样本 MUST NOT 进入倍数命中率分母；即使代币活不过 15 分钟，`no_trade` 和 `pool_removed` 也 SHALL 进入失败样本。系统 SHALL 记录可确定的首次 2x 价格触达用时；30 秒 Kline 只能给出该蜡烛结束时的保守近似。只有 `sent` 和 `confirmed` 信号进入推送数和结果统计；`delivery_unknown` 只进入运维失败指标。
 
 #### Scenario: Mixed evaluation states are summarized
 - **WHEN** 统计区间内同时存在完成、待评估、无交易、撤池和数据未知信号
-- **THEN** 系统按固定分母规则计算命中率并单独展示完成数、待评估数和覆盖率
+- **THEN** 系统按固定分母规则计算各目标倍数命中率，并单独展示完成数、待评估数和覆盖率
 
 ### Requirement: Balanced quality statistics
-系统 SHALL 展示推送数、命中率、1m/5m/15m/1h 收益、MFE、MAE、曲线毕业率、双榜确认率、信号来源拆分和端到端延迟。所有信号质量统计 MUST 限定到单一 `config_version`，不得把不同阈值版本混合为一个命中率。曲线信号在 T+1h 前出现 GMGN `completed` 事件时记为已毕业；T+1h 时仍有新鲜 Trenches 数据且处于 `new_creation/near_completion` 时记为未毕业；其他情况记为毕业状态未知。曲线毕业率 SHALL 等于已毕业数除以已毕业加未毕业数，未知样本只降低覆盖率。双榜确认率 SHALL 等于 `confirmed` 数除以全部 `sent+confirmed` 首次信号数。默认卡片的收益、MFE、MAE 和延迟 SHALL 使用中位数；详细统计可以额外展示平均延迟。系统 SHALL 明确最高涨幅是价格触达研究指标而非可成交收益。
+系统 SHALL 默认展示推送数、各目标倍数命中率、最高倍数中位数、达到 2x 的中位用时、无交易率、已确认撤池率、曲线毕业率、双榜确认率、覆盖率和端到端延迟。1m/5m/15m/1h 固定时点收益及 15m/1h MFE/MAE SHALL 保留在详细统计中。所有信号质量统计 MUST 限定到单一 `config_version`，不得把不同阈值版本混合。曲线信号在 T+1h 前出现 GMGN `completed` 事件时记为已毕业；T+1h 时仍有新鲜 Trenches 数据且处于 `new_creation/near_completion` 时记为未毕业；其他情况记为毕业状态未知。曲线毕业率 SHALL 等于已毕业数除以已毕业加未毕业数，未知样本只降低覆盖率。双榜确认率 SHALL 等于 `confirmed` 数除以全部 `sent+confirmed` 首次信号数。默认卡片的倍数、用时和延迟 SHALL 使用中位数；详细统计可以额外展示平均延迟。系统 SHALL 明确最高倍数是价格触达研究指标而非可成交收益。
 
 #### Scenario: Curve graduation evidence is incomplete
 - **WHEN** 曲线信号在 T+1h 前没有 completed 事件，且 T+1h 附近也没有新鲜 Trenches 生命周期数据
@@ -68,7 +68,7 @@
 
 #### Scenario: Detailed source report is generated
 - **WHEN** 请求详细统计
-- **THEN** 系统按曲线加速、1m 极速突破、跨来源启动和双榜确认展示样本量、命中率、中位 MFE/MAE 与平均延迟
+- **THEN** 系统按曲线加速、1m 极速突破、跨来源启动和双榜确认展示样本量、1.5x/2x 命中、最高倍数中位数、MAE 与平均延迟
 
 ### Requirement: Sample progress milestones
 系统 SHALL 将已成熟的 T+1h `completed`、`no_trade` 和 `pool_removed` 视为有效样本，`api_missing`、`retry_exhausted` 和未到期作为覆盖缺口而不是失败样本。统计 SHALL 展示当前配置的有效样本数和下一复盘节点：首次 30，然后 100，此后每增加 50。

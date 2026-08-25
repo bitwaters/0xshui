@@ -57,6 +57,7 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
           return1h: 1.2,
           mfe: 1.5,
           mae: -0.2,
+          timeTo2xMs: 120_000,
           graduation: "graduated",
         }),
       ],
@@ -78,7 +79,7 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
       decision: { evidence: { trigger: "cross_source" } },
       outcomes: [
         outcome(FIFTEEN, "pool_removed", { return15m: -1, mfe: -1, mae: -1 }),
-        outcome(HOUR, "pool_removed", { return1h: -1, mfe: -1, mae: -1 }),
+        outcome(HOUR, "pool_removed", { return1h: -1, mfe: 0, mae: -1 }),
       ],
     }),
     row(4, {
@@ -97,13 +98,30 @@ test("statistics use fixed sent-only denominators and exclude unknown outcomes",
   assert.equal(stats.signals, 5);
   assert.equal(stats.due15, 4);
   assert.equal(stats.pending15, 1);
+  assert.equal(stats.pending1h, 1);
   assert.equal(stats.evaluated15, 3);
-  assert.equal(stats.hit15, 1);
-  assert.equal(stats.hitRate15, 1 / 3);
   assert.equal(stats.coverage15, 3 / 4);
   assert.equal(stats.evaluated1h, 3);
-  assert.equal(stats.largeGain1h, 1);
-  assert.equal(stats.largeGainRate1h, 1 / 3);
+  assert.deepEqual(
+    stats.multipleHits.map(({ multiple, hits, eligible, rate }) => ({
+      multiple,
+      hits,
+      eligible,
+      rate,
+    })),
+    [
+      { multiple: 1.2, hits: 1, eligible: 3, rate: 1 / 3 },
+      { multiple: 1.5, hits: 1, eligible: 3, rate: 1 / 3 },
+      { multiple: 2, hits: 1, eligible: 3, rate: 1 / 3 },
+      { multiple: 3, hits: 0, eligible: 3, rate: 0 },
+      { multiple: 5, hits: 0, eligible: 3, rate: 0 },
+    ],
+  );
+  assert.equal(stats.medianPeakMultiple, 1);
+  assert.equal(stats.medianTimeTo2xMs, 120_000);
+  assert.equal(stats.timeTo2xSamples, 1);
+  assert.equal(stats.noTradeRate, 1 / 3);
+  assert.equal(stats.confirmedPoolRemovalRate, 1 / 3);
   assert.equal(stats.medianReturn15m, 0);
   assert.equal(stats.medianMfe15, 0);
   assert.equal(stats.medianMae15, -0.1);
@@ -129,9 +147,30 @@ test("statistics card discloses samples, coverage, touch metrics, and disclaimer
   const text = renderStatisticsCard(stats, "今日", true);
   assert.ok(text.includes("样本不足"));
   assert.ok(text.includes("数据覆盖率"));
-  assert.ok(text.includes("价格触达研究指标"));
+  assert.ok(text.includes("≥2x"));
+  assert.ok(text.includes("最高倍数和触达时间为价格研究指标"));
+  assert.ok(text.includes("早死、无交易和确认撤池计为失败"));
   assert.ok(text.includes("不代表安全或可成交收益"));
   assert.ok(text.includes("双榜确认"));
+});
+
+test("2x timing ignores malformed or inconsistent stored result metadata", () => {
+  const stats = aggregateStatistics(
+    [
+      row(1, {
+        outcomes: [outcome(HOUR, "completed", { mfe: 0.5, mae: -0.1, timeTo2xMs: 1_000 })],
+      }),
+      row(2, {
+        outcomes: [
+          outcome(HOUR, "completed", { mfe: 1.2, mae: -0.1, timeTo2xMs: HOUR + 1 }),
+        ],
+      }),
+    ],
+    NOW,
+  );
+  assert.equal(stats.multipleHits.find((hit) => hit.multiple === 2)?.hits, 1);
+  assert.equal(stats.timeTo2xSamples, 0);
+  assert.equal(stats.medianTimeTo2xMs, null);
 });
 
 test("unknown source metadata is normalized before HTML rendering", () => {
@@ -164,8 +203,6 @@ test("daily report claim prevents a duplicate after restart", async () => {
     const service = new StatsService({
       repository,
       timeZone: "Asia/Shanghai",
-      hitGain: 0.3,
-      largeGain: 1,
       configVersion,
       now: () => NOW,
     });
@@ -179,8 +216,6 @@ test("daily report claim prevents a duplicate after restart", async () => {
     const afterRestart = new StatsService({
       repository: new PersistenceRepository(database),
       timeZone: "Asia/Shanghai",
-      hitGain: 0.3,
-      largeGain: 1,
       configVersion,
       now: () => NOW,
     });

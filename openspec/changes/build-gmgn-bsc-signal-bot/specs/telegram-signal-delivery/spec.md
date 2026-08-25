@@ -60,7 +60,7 @@
 
 #### Scenario: User requests default statistics
 - **WHEN** 用户发送 `/stats`
-- **THEN** 系统返回当前配置版本的累计推送量、完成和待评估数量、15m/1h 命中指标、中位涨幅与回撤、曲线毕业率、双榜确认、延迟、覆盖率和样本进度
+- **THEN** 系统返回当前配置版本的累计推送量、完成和待评估数量、1.2x/1.5x/2x/3x/5x 命中率、最高倍数中位数、2x 中位用时、无交易率、已确认撤池率、曲线毕业率、双榜确认、延迟、覆盖率和样本进度
 
 #### Scenario: No signals have completed evaluation
 - **WHEN** 日报时间到但当天没有已完成观察周期的样本

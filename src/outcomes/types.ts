@@ -14,6 +14,7 @@ export interface CalculatedOutcome {
   readonly return1h?: number;
   readonly mfe: number;
   readonly mae: number;
+  readonly timeTo2xMs?: number;
   readonly candleCount: number;
   readonly graduation?: GraduationStatus;
 }

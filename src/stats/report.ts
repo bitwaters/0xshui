@@ -103,6 +103,17 @@ function latency(value: number | null): string {
   return value === null ? "样本不足" : `${(value / 1_000).toFixed(1)} 秒`;
 }
 
+function duration(value: number | null): string {
+  if (value === null) return "样本不足";
+  const seconds = Math.round(value / 1_000);
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒`;
+}
+
+function multiple(value: number | null): string {
+  return value === null ? "样本不足" : `${value.toFixed(2)}x`;
+}
+
 function sourceLabel(source: string): string {
   switch (source) {
     case "curve_acceleration":
@@ -133,45 +144,59 @@ export function renderStatisticsCard(
     `📊 <b>BSC 信号统计 · ${label}</b>`,
     "",
     `推送：${stats.signals}`,
-    `已评估 15m：${stats.evaluated15}/${stats.due15}`,
-    `已评估 1h：${stats.evaluated1h}/${stats.due1h}`,
-    `待满 15m：${stats.pending15}`,
+    `倍数样本：${stats.evaluated1h}/${stats.due1h}`,
+    `待满观察窗口：${stats.pending1h}`,
     `有效 T+1h 样本：${stats.validSamples1h}（${reviewStage(stats.reviewStage)}）`,
     `下一复盘节点：${stats.nextReviewAt}`,
     "",
-    `15m 命中率：${percentage(stats.hitRate15)} (${stats.hit15}/${stats.evaluated15})`,
-    `1h 大涨率：${percentage(stats.largeGainRate1h)} (${stats.largeGain1h}/${stats.evaluated1h})`,
-    `1m/5m/15m/1h 中位收益：${[
-      stats.medianReturn1m,
-      stats.medianReturn5m,
-      stats.medianReturn15m,
-      stats.medianReturn1h,
-    ]
-      .map(signed)
-      .join(" · ")}`,
-    `15m 中位 MFE / MAE：${signed(stats.medianMfe15)} / ${signed(stats.medianMae15)}`,
-    `1h 中位 MFE / MAE：${signed(stats.medianMfe1h)} / ${signed(stats.medianMae1h)}`,
+    ...stats.multipleHits.map(
+      (hit) => `≥${hit.multiple}x：${percentage(hit.rate)} (${hit.hits}/${hit.eligible})`,
+    ),
+    "",
+    `最高倍数中位数：${multiple(stats.medianPeakMultiple)}`,
+    `达到 2x 中位用时：${duration(stats.medianTimeTo2xMs)} (${stats.timeTo2xSamples} 个可计时样本)`,
+    `无交易率：${percentage(stats.noTradeRate)} (${stats.noTradeSamples}/${stats.evaluated1h})`,
+    `已确认撤池率：${percentage(stats.confirmedPoolRemovalRate)} (${stats.confirmedPoolRemovals}/${stats.evaluated1h})`,
     "",
     `曲线毕业率：${percentage(stats.curveGraduationRate)} (${stats.graduatedCurves}/${stats.knownCurveGraduations})`,
     `双榜确认率：${percentage(stats.confirmationRate)} (${stats.confirmed}/${stats.signals})`,
     `中位推送延迟：${latency(stats.medianLatencyMs)}`,
-    `15m 数据覆盖率：${percentage(stats.coverage15)} (${stats.evaluated15}/${stats.due15})`,
     `1h 数据覆盖率：${percentage(stats.coverage1h)} (${stats.evaluated1h}/${stats.due1h})`,
   ];
   if (detail) {
-    lines.push("", "<b>按信号来源</b>");
+    lines.push(
+      "",
+      "<b>固定时点诊断</b>",
+      `已评估 15m：${stats.evaluated15}/${stats.due15}，覆盖率 ${percentage(stats.coverage15)}`,
+      `1m/5m/15m/1h 中位收益：${[
+        stats.medianReturn1m,
+        stats.medianReturn5m,
+        stats.medianReturn15m,
+        stats.medianReturn1h,
+      ]
+        .map(signed)
+        .join(" · ")}`,
+      `15m 中位 MFE / MAE：${signed(stats.medianMfe15)} / ${signed(stats.medianMae15)}`,
+      `1h 中位 MFE / MAE：${signed(stats.medianMfe1h)} / ${signed(stats.medianMae1h)}`,
+      "",
+      "<b>按信号来源</b>",
+    );
     for (const source of stats.sources) {
+      const hit15x = source.multipleHits.find((hit) => hit.multiple === 1.5);
+      const hit2x = source.multipleHits.find((hit) => hit.multiple === 2);
       lines.push(
-        `${sourceLabel(source.source)}：${source.signals} 条，命中 ${source.hit15}/${source.eligible15}，` +
-          `MFE ${signed(source.medianMfe)}，MAE ${signed(source.medianMae)}，` +
+        `${sourceLabel(source.source)}：${source.signals} 条，` +
+          `≥1.5x ${hit15x?.hits ?? 0}/${source.eligible1h}，` +
+          `≥2x ${hit2x?.hits ?? 0}/${source.eligible1h}，` +
+          `最高倍数中位数 ${multiple(source.medianPeakMultiple)}，MAE ${signed(source.medianMae)}，` +
           `平均延迟 ${latency(source.averageLatencyMs)}`,
       );
     }
   }
   lines.push(
     "",
-    "命中：15 分钟内最高涨幅 ≥ 30%；1 小时大涨 ≥ 100%",
-    "注：最高涨幅为价格触达研究指标，不代表可成交收益。",
+    "口径：信号后 1 小时内达到目标倍数即命中；早死、无交易和确认撤池计为失败。",
+    "注：最高倍数和触达时间为价格研究指标，不代表实际可成交收益。",
     "仅为数据筛选信号，不代表安全或可成交收益。",
   );
   return lines.join("\n");
@@ -180,8 +205,6 @@ export function renderStatisticsCard(
 export interface StatsServiceOptions {
   readonly repository: PersistenceRepository;
   readonly timeZone: string;
-  readonly hitGain: number;
-  readonly largeGain: number;
   readonly configVersion: number;
   readonly now?: () => number;
 }
@@ -205,7 +228,7 @@ export class StatsService {
       this.options.configVersion,
     );
     return renderStatisticsCard(
-      aggregateStatistics(rows, now, this.options.hitGain, this.options.largeGain),
+      aggregateStatistics(rows, now),
       `${range.label} · v${this.options.configVersion}`,
       request === "detail",
     );

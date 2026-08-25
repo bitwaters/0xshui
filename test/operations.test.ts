@@ -330,6 +330,11 @@ test("acceptance requires sample, path, coverage, latency, and API quality gates
     assert.equal(metrics.qualifiedToSent.p95, 4_000);
     assert.equal(metrics.fastSourceToSent.p95, 8_000);
     assert.equal(metrics.outcomeCoverage1h, 1);
+    assert.equal(metrics.multipleHitRates["1.2x"], 1);
+    assert.equal(metrics.multipleHitRates["1.5x"], 0);
+    assert.ok(Math.abs((metrics.medianPeakMultiple ?? 0) - 1.4) < Number.EPSILON);
+    assert.equal(metrics.noTradeRate, 0);
+    assert.equal(metrics.confirmedPoolRemovalRate, 0);
     const service = new AcceptanceService(repository, configKey, configVersion);
     assert.equal(service.report(NOW).validSamples, 100);
     assert.deepEqual(service.report(NOW).triggerSamples, {

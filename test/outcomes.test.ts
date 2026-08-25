@@ -127,6 +127,7 @@ test("outcome calculator excludes the signal candle and any future candle", () =
   assert.equal(result.return15m, 3);
   assert.equal(result.mfe, 3.5);
   assert.equal(result.mae, -0.5);
+  assert.equal(result.timeTo2xMs, 45_000);
   assert.equal(result.candleCount, 3);
 });
 

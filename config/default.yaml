@@ -103,6 +103,8 @@ outcomes:
   checkpoints:
     - 15m
     - 1h
+  # Kept at their V1 values so existing config-version samples remain cumulative.
+  # Headline quality now uses fixed 1.2x/1.5x/2x/3x/5x rates over the 1h checkpoint.
   hit_window: 15m
   hit_gain: 0.30
   large_gain_window: 1h

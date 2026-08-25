@@ -61,6 +61,8 @@
 - [x] 7.4 Implement the fixed 15m hit, 1h large-gain, sent-only denominator, 1h curve graduation, double-confirmation, coverage, median-default, and detailed average-latency aggregation rules
 - [x] 7.5 Implement `/stats`, `/stats 7d`, `/stats 30d`, `/stats detail`, and timezone-aware once-per-day reports with restart deduplication, sample-size, and price-touch disclosures
 - [x] 7.6 Add outcome and statistics tests for pending samples, no-trade, confirmed removal, missing API data, candle boundaries, medians, and denominator correctness
+- [x] 7.7 Replace minute-named headline hit rates with fixed 1.2x/1.5x/2x/3x/5x price-touch rates over the complete one-hour observation window, including early-dead/no-trade/pool-removed samples as failures and persisting approximate time-to-2x
+- [x] 7.8 Update Telegram statistics, operations/replay summaries, tests, and documentation while retaining fixed-time returns as detail-only diagnostics and preserving existing cumulative samples
 
 ## 8. Deterministic Replay
 

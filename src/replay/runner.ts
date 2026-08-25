@@ -280,14 +280,10 @@ export class ReplayRunner {
     const replayQuality = aggregateStatistics(
       this.replayRows(actualRows, signals, storedConfig.version),
       evaluationAt,
-      config.outcomes.hit_gain,
-      config.outcomes.large_gain,
     );
     const actualQuality = aggregateStatistics(
       actualRows,
       evaluationAt,
-      config.outcomes.hit_gain,
-      config.outcomes.large_gain,
     );
     const researchSamples = this.options.repository.listResearchSamples(
       this.options.from,
@@ -314,8 +310,6 @@ export class ReplayRunner {
     const researchQuality = aggregateStatistics(
       researchRows,
       evaluationAt,
-      config.outcomes.hit_gain,
-      config.outcomes.large_gain,
     );
     const actionCounts = this.count(decisions.map((item) => item.action));
     const reasonCounts = this.count(

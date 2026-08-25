@@ -130,8 +130,6 @@ async function run(): Promise<void> {
     const stats = new StatsService({
       repository: context.repository,
       timeZone: context.config.report_timezone,
-      hitGain: context.config.outcomes.hit_gain,
-      largeGain: context.config.outcomes.large_gain,
       configVersion: context.configVersion,
     });
     const metrics = new MetricsService(context.repository);

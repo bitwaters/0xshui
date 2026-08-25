@@ -21,10 +21,11 @@ export interface OperationalMetrics {
   readonly cooldownUntil: number | null;
   readonly outcomeCoverage15: number | null;
   readonly outcomeCoverage1h: number | null;
-  readonly hitRate15: number | null;
-  readonly largeGainRate1h: number | null;
-  readonly medianMfe15: number | null;
-  readonly medianMae15: number | null;
+  readonly multipleHitRates: Readonly<Record<string, number | null>>;
+  readonly medianPeakMultiple: number | null;
+  readonly medianTimeTo2xMs: number | null;
+  readonly noTradeRate: number | null;
+  readonly confirmedPoolRemovalRate: number | null;
 }
 
 function triggerOf(value: unknown): string | null {
@@ -100,10 +101,13 @@ export class MetricsService {
       cooldownUntil: this.repository.getRuntimeState<number>("gmgn_cooldown_until"),
       outcomeCoverage15: stats.coverage15,
       outcomeCoverage1h: stats.coverage1h,
-      hitRate15: stats.hitRate15,
-      largeGainRate1h: stats.largeGainRate1h,
-      medianMfe15: stats.medianMfe15,
-      medianMae15: stats.medianMae15,
+      multipleHitRates: Object.fromEntries(
+        stats.multipleHits.map((hit) => [`${hit.multiple}x`, hit.rate]),
+      ),
+      medianPeakMultiple: stats.medianPeakMultiple,
+      medianTimeTo2xMs: stats.medianTimeTo2xMs,
+      noTradeRate: stats.noTradeRate,
+      confirmedPoolRemovalRate: stats.confirmedPoolRemovalRate,
     };
   }
 }

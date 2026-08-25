@@ -5,13 +5,22 @@ const ONE_HOUR = 60 * 60_000;
 const KNOWN_OUTCOME_STATES = new Set(["completed", "no_trade", "pool_removed"]);
 const KNOWN_TRIGGERS = new Set(["curve_acceleration", "fast_rank", "cross_source"]);
 
+export const TARGET_MULTIPLES = [1.2, 1.5, 2, 3, 5] as const;
+export type TargetMultiple = (typeof TARGET_MULTIPLES)[number];
+
+export interface MultipleHitStatistics {
+  readonly multiple: TargetMultiple;
+  readonly hits: number;
+  readonly eligible: number;
+  readonly rate: number | null;
+}
+
 export interface SourceStatistics {
   readonly source: string;
   readonly signals: number;
-  readonly hit15: number;
-  readonly eligible15: number;
   readonly eligible1h: number;
-  readonly medianMfe: number | null;
+  readonly multipleHits: readonly MultipleHitStatistics[];
+  readonly medianPeakMultiple: number | null;
   readonly medianMae: number | null;
   readonly averageLatencyMs: number | null;
 }
@@ -21,17 +30,22 @@ export interface SignalStatistics {
   readonly due15: number;
   readonly due1h: number;
   readonly pending15: number;
+  readonly pending1h: number;
   readonly evaluated15: number;
   readonly evaluated1h: number;
   readonly validSamples1h: number;
   readonly nextReviewAt: number;
   readonly reviewStage: "collecting" | "first_review" | "baseline";
-  readonly hit15: number;
-  readonly largeGain1h: number;
+  readonly multipleHits: readonly MultipleHitStatistics[];
+  readonly medianPeakMultiple: number | null;
+  readonly medianTimeTo2xMs: number | null;
+  readonly timeTo2xSamples: number;
+  readonly confirmedPoolRemovals: number;
+  readonly confirmedPoolRemovalRate: number | null;
+  readonly noTradeSamples: number;
+  readonly noTradeRate: number | null;
   readonly coverage15: number | null;
   readonly coverage1h: number | null;
-  readonly hitRate15: number | null;
-  readonly largeGainRate1h: number | null;
   readonly medianReturn1m: number | null;
   readonly medianReturn5m: number | null;
   readonly medianReturn15m: number | null;
@@ -57,6 +71,7 @@ interface ParsedResult {
   readonly return1h?: number;
   readonly mfe?: number;
   readonly mae?: number;
+  readonly timeTo2xMs?: number;
   readonly graduation?: "graduated" | "not_graduated" | "unknown";
 }
 
@@ -77,6 +92,7 @@ function parseResult(value: unknown): ParsedResult {
   const return1h = finiteField(record, "return1h");
   const mfe = finiteField(record, "mfe");
   const mae = finiteField(record, "mae");
+  const timeTo2xMs = finiteField(record, "timeTo2xMs");
   return {
     ...(return1m === undefined ? {} : { return1m }),
     ...(return5m === undefined ? {} : { return5m }),
@@ -84,6 +100,7 @@ function parseResult(value: unknown): ParsedResult {
     ...(return1h === undefined ? {} : { return1h }),
     ...(mfe === undefined ? {} : { mfe }),
     ...(mae === undefined ? {} : { mae }),
+    ...(timeTo2xMs === undefined || timeTo2xMs < 0 ? {} : { timeTo2xMs }),
     ...(graduation === "graduated" ||
     graduation === "not_graduated" ||
     graduation === "unknown"
@@ -134,11 +151,28 @@ function outcomeAt(signal: StatisticsSignalRow, checkpointMs: number) {
   return signal.outcomes.find((outcome) => outcome.checkpointMs === checkpointMs);
 }
 
+function peakMultiple(result: ParsedResult): number | undefined {
+  return result.mfe === undefined ? undefined : Math.max(0, 1 + result.mfe);
+}
+
+function summarizeMultiples(
+  peaks: readonly number[],
+  eligible: number,
+): readonly MultipleHitStatistics[] {
+  return TARGET_MULTIPLES.map((multiple) => {
+    const hits = peaks.filter((peak) => peak >= multiple).length;
+    return {
+      multiple,
+      hits,
+      eligible,
+      rate: eligible === 0 ? null : hits / eligible,
+    };
+  });
+}
+
 export function aggregateStatistics(
   signals: readonly StatisticsSignalRow[],
   now: number,
-  hitGain = 0.3,
-  largeGain = 1,
 ): SignalStatistics {
   const fifteenReturns: number[] = [];
   const oneMinuteReturns: number[] = [];
@@ -148,15 +182,17 @@ export function aggregateStatistics(
   const mae15: number[] = [];
   const mfe1h: number[] = [];
   const mae1h: number[] = [];
+  const peakMultiples: number[] = [];
+  const timeTo2x: number[] = [];
   const latencies: number[] = [];
   let due15 = 0;
   let due1h = 0;
   let evaluated15 = 0;
   let evaluated1h = 0;
-  let hit15 = 0;
-  let largeGain1h = 0;
   let graduatedCurves = 0;
   let knownCurveGraduations = 0;
+  let confirmedPoolRemovals = 0;
+  let noTradeSamples = 0;
   const bySource = new Map<string, StatisticsSignalRow[]>();
 
   for (const signal of signals) {
@@ -177,9 +213,6 @@ export function aggregateStatistics(
       if (outcome15 !== undefined && KNOWN_OUTCOME_STATES.has(outcome15.state)) {
         evaluated15 += 1;
         const result = parseResult(outcome15.result);
-        if ((result.mfe ?? -Infinity) >= hitGain) {
-          hit15 += 1;
-        }
         if (result.return1m !== undefined) oneMinuteReturns.push(result.return1m);
         if (result.return5m !== undefined) fiveMinuteReturns.push(result.return5m);
         if (result.return15m !== undefined) fifteenReturns.push(result.return15m);
@@ -192,9 +225,18 @@ export function aggregateStatistics(
       due1h += 1;
       if (outcome1h !== undefined && KNOWN_OUTCOME_STATES.has(outcome1h.state)) {
         evaluated1h += 1;
+        if (outcome1h.state === "pool_removed") confirmedPoolRemovals += 1;
+        if (outcome1h.state === "no_trade") noTradeSamples += 1;
         const result = parseResult(outcome1h.result);
-        if ((result.mfe ?? -Infinity) >= largeGain) {
-          largeGain1h += 1;
+        const peak = peakMultiple(result);
+        if (peak !== undefined) peakMultiples.push(peak);
+        if (
+          peak !== undefined &&
+          peak >= 2 &&
+          result.timeTo2xMs !== undefined &&
+          result.timeTo2xMs <= ONE_HOUR
+        ) {
+          timeTo2x.push(result.timeTo2xMs);
         }
         if (result.return1h !== undefined) oneHourReturns.push(result.return1h);
         if (result.mfe !== undefined) mfe1h.push(result.mfe);
@@ -210,24 +252,18 @@ export function aggregateStatistics(
   const sourceStats = [...bySource.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([source, rows]): SourceStatistics => {
-      const sourceMfe: number[] = [];
+      const sourcePeaks: number[] = [];
       const sourceMae: number[] = [];
       const sourceLatencies: number[] = [];
-      let eligible15 = 0;
       let eligible1h = 0;
-      let sourceHits = 0;
       for (const row of rows) {
-        const outcome = outcomeAt(row, FIFTEEN_MINUTES);
-        if (outcome !== undefined && KNOWN_OUTCOME_STATES.has(outcome.state)) {
-          eligible15 += 1;
-          const result = parseResult(outcome.result);
-          if ((result.mfe ?? -Infinity) >= hitGain) sourceHits += 1;
-          if (result.mfe !== undefined) sourceMfe.push(result.mfe);
-          if (result.mae !== undefined) sourceMae.push(result.mae);
-        }
         const outcome1h = outcomeAt(row, ONE_HOUR);
         if (outcome1h !== undefined && KNOWN_OUTCOME_STATES.has(outcome1h.state)) {
           eligible1h += 1;
+          const result = parseResult(outcome1h.result);
+          const peak = peakMultiple(result);
+          if (peak !== undefined) sourcePeaks.push(peak);
+          if (result.mae !== undefined) sourceMae.push(result.mae);
         }
         if (row.qualifiedAt !== null && row.sentAt >= row.qualifiedAt) {
           sourceLatencies.push(row.sentAt - row.qualifiedAt);
@@ -236,10 +272,9 @@ export function aggregateStatistics(
       return {
         source,
         signals: rows.length,
-        hit15: sourceHits,
-        eligible15,
         eligible1h,
-        medianMfe: median(sourceMfe),
+        multipleHits: summarizeMultiples(sourcePeaks, eligible1h),
+        medianPeakMultiple: median(sourcePeaks),
         medianMae: median(sourceMae),
         averageLatencyMs: average(sourceLatencies),
       };
@@ -257,17 +292,23 @@ export function aggregateStatistics(
     due15,
     due1h,
     pending15: signals.length - due15,
+    pending1h: signals.length - due1h,
     evaluated15,
     evaluated1h,
     validSamples1h: evaluated1h,
     nextReviewAt,
     reviewStage: evaluated1h >= 100 ? "baseline" : evaluated1h >= 30 ? "first_review" : "collecting",
-    hit15,
-    largeGain1h,
+    multipleHits: summarizeMultiples(peakMultiples, evaluated1h),
+    medianPeakMultiple: median(peakMultiples),
+    medianTimeTo2xMs: median(timeTo2x),
+    timeTo2xSamples: timeTo2x.length,
+    confirmedPoolRemovals,
+    confirmedPoolRemovalRate:
+      evaluated1h === 0 ? null : confirmedPoolRemovals / evaluated1h,
+    noTradeSamples,
+    noTradeRate: evaluated1h === 0 ? null : noTradeSamples / evaluated1h,
     coverage15: due15 === 0 ? null : evaluated15 / due15,
     coverage1h: due1h === 0 ? null : evaluated1h / due1h,
-    hitRate15: evaluated15 === 0 ? null : hit15 / evaluated15,
-    largeGainRate1h: evaluated1h === 0 ? null : largeGain1h / evaluated1h,
     medianReturn1m: median(oneMinuteReturns),
     medianReturn5m: median(fiveMinuteReturns),
     medianReturn15m: median(fifteenReturns),

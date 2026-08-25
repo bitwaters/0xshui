@@ -22,8 +22,11 @@ export interface ReplayQualitySummary {
   readonly signals: number;
   readonly evaluated15: number;
   readonly evaluated1h: number;
-  readonly hitRate15: number | null;
-  readonly largeGainRate1h: number | null;
+  readonly multipleHitRates: Readonly<Record<string, number | null>>;
+  readonly medianPeakMultiple: number | null;
+  readonly medianTimeTo2xMs: number | null;
+  readonly noTradeRate: number | null;
+  readonly confirmedPoolRemovalRate: number | null;
   readonly graduationRate: number | null;
   readonly medianMfe15: number | null;
   readonly medianMae15: number | null;
@@ -62,8 +65,13 @@ export function qualitySummary(stats: SignalStatistics): ReplayQualitySummary {
     signals: stats.signals,
     evaluated15: stats.evaluated15,
     evaluated1h: stats.evaluated1h,
-    hitRate15: stats.hitRate15,
-    largeGainRate1h: stats.largeGainRate1h,
+    multipleHitRates: Object.fromEntries(
+      stats.multipleHits.map((hit) => [`${hit.multiple}x`, hit.rate]),
+    ),
+    medianPeakMultiple: stats.medianPeakMultiple,
+    medianTimeTo2xMs: stats.medianTimeTo2xMs,
+    noTradeRate: stats.noTradeRate,
+    confirmedPoolRemovalRate: stats.confirmedPoolRemovalRate,
     graduationRate: stats.curveGraduationRate,
     medianMfe15: stats.medianMfe15,
     medianMae15: stats.medianMae15,
