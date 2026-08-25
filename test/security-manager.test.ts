@@ -103,7 +103,7 @@ test("Security queue is candidate-scoped, concurrency-bounded, cached, and send-
   }
 });
 
-test("Security contract failure is persisted as failed and never cached", async () => {
+test("Security failures suppress repeated preheat but never block an urgent refresh", async () => {
   const database = openDatabase({ path: ":memory:" });
   try {
     const repository = new PersistenceRepository(database);
@@ -135,7 +135,9 @@ test("Security contract failure is persisted as failed and never cached", async 
     assert.equal(await manager.getFreshForSend(D), null);
     assert.equal(manager.getCached(D), null);
     assert.equal(await manager.preheat(D), null);
-    assert.equal(calls, 2, "failed Security results must not enter cache");
+    assert.equal(calls, 1, "failed Security preheat must not immediately repeat");
+    assert.equal(await manager.getFreshForSend(D), null);
+    assert.equal(calls, 2, "an urgent send refresh must bypass the failed-preheat cache");
     const statuses = database
       .prepare("SELECT status FROM security_checks ORDER BY ingest_seq")
       .all();

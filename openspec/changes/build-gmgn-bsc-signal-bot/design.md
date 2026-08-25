@@ -80,7 +80,7 @@ Detector 输入为当前 token 聚合状态、时间窗口、Security 状态和�
 
 Security Gate 将 GMGN 上游过滤与按需 Token Security 合并，冲突字段取更危险值。所有路径要求明确的 Honeypot、Open Source、税率和 Top10；已毕业路径额外要求 Owner 与 LP 证据；曲线路径不要求尚不存在的 DEX LP，但额外要求 Safe Trenches 和明确的 Bundler、Insider、Dev Team 与 Creator 持仓字段。
 
-Security 预热只覆盖 1m Top30 或低门槛曲线候选，结果缓存 60 秒；发送时最大年龄 10 秒。等待刷新期间持续执行回落检查。
+Security 预热只覆盖 1m Top30 或低门槛曲线候选，成功结果缓存 60 秒；失败的非紧急预热同样在内存抑制 60 秒，避免对同一不完整代币反复请求。发送时最大年龄 10 秒，真正满足发送条件的紧急刷新不受失败预热抑制；等待刷新期间持续执行回落检查。
 
 选择理由：全榜 Security 扫描会消耗请求预算，推迟真正候选；统一要求 DEX LP 又会错误消灭 Bonding Curve 机会。替代方案“未知全部放行”风险不可接受，“未知全部拒绝”则会使实测缺失可选字段的曲线路径接近零信号。
 

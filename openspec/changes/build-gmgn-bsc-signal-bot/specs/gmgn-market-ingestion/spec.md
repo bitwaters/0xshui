@@ -64,7 +64,7 @@
 - **THEN** 该规则本轮不触发，但陈旧数据可以保留用于内部展示和诊断
 
 ### Requirement: Candidate-scoped Security checks
-系统 SHALL 仅为满足预热条件的候选查询 Token Security；热榜预热条件为进入 1m Top30，曲线预热条件为累计 swaps 至少 10、holders 至少 10 且累计净买入为正。正式发送使用的 Security 结果 MUST 不超过 10 秒。
+系统 SHALL 仅为满足预热条件的候选查询 Token Security；热榜预热条件为进入 1m Top30，曲线预热条件为累计 swaps 至少 10、holders 至少 10 且累计净买入为正。成功结果 SHALL 缓存 60 秒；失败的非紧急预热 SHALL 抑制 60 秒，但正式发送前的紧急刷新 MUST 绕过该抑制。正式发送使用的 Security 结果 MUST 不超过 10 秒。
 
 #### Scenario: Candidate enters preheat range
 - **WHEN** 一个此前未预热的代币首次满足任一预热条件
@@ -76,7 +76,7 @@
 
 #### Scenario: Security cannot be obtained
 - **WHEN** Security 请求失败、超时或关键字段不完整
-- **THEN** 系统不发送正式信号
+- **THEN** 系统不发送正式信号，并抑制该代币的重复非紧急预热，但仍允许后续发送前紧急刷新
 
 ### Requirement: Rate-limit and failure control
 系统 SHALL 使用全局加权限速，固定轮转的基础实时轮询目标负载为 1 request/s、平均 weight 2/s，本地总上限为 weight 5/s，原始请求和重试均消耗预算。单请求 SHALL 在 5 秒超时；收到 429 后 SHALL 暂停全部 GMGN 请求，优先采用有效的未来 `X-RateLimit-Reset`、其次采用有效的未来 `reset_at`，并在有效 reset 后增加 1 秒安全缓冲；两者均缺失或非法时使用 5 分钟冷却。`cooldown_until` SHALL 持久化并在服务重启后继续生效，且冷却期间不得主动请求 GMGN。

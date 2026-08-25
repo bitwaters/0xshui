@@ -36,6 +36,7 @@ export interface SecurityManagerOptions {
 
 export class SecurityManager {
   private readonly cache = new Map<string, CachedSecurity>();
+  private readonly failedPreheats = new Map<string, number>();
   private readonly jobs = new Map<string, SecurityJob>();
   private readonly queue: SecurityJob[] = [];
   private active = 0;
@@ -82,6 +83,10 @@ export class SecurityManager {
     const cached = this.cache.get(tokenKey);
     if (cached !== undefined && this.now() - cached.capturedAt <= maximumAgeMs) {
       return Promise.resolve(cached.snapshot);
+    }
+    const failedAt = this.failedPreheats.get(tokenKey);
+    if (!urgent && failedAt !== undefined && this.now() - failedAt <= this.options.cacheTtlMs) {
+      return Promise.resolve(null);
     }
     const existing = this.jobs.get(tokenKey);
     if (existing !== undefined) {
@@ -143,12 +148,14 @@ export class SecurityManager {
         data: snapshot,
       });
       this.cache.set(snapshot.tokenKey, { snapshot, capturedAt: raw.receivedAt });
+      this.failedPreheats.delete(snapshot.tokenKey);
       job.resolve(snapshot);
       void Promise.resolve(
         this.options.onCompleted?.(snapshot.tokenKey, snapshot, raw.receivedAt),
       ).catch(() => undefined);
     } catch (error) {
       const reason = error instanceof GmgnError ? error.kind : "unknown";
+      this.failedPreheats.set(job.tokenKey, this.now());
       try {
         this.options.repository.appendSecurityEvent({
           tokenKey: job.tokenKey.toLowerCase(),
@@ -173,6 +180,11 @@ export class SecurityManager {
     for (const [tokenKey, cached] of this.cache) {
       if (cached.capturedAt < cutoff) {
         this.cache.delete(tokenKey);
+      }
+    }
+    for (const [tokenKey, failedAt] of this.failedPreheats) {
+      if (failedAt < cutoff) {
+        this.failedPreheats.delete(tokenKey);
       }
     }
   }
