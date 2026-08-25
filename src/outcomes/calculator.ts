@@ -8,6 +8,7 @@ const PERIODS = [
   ["return15m", 15 * 60_000],
   ["return1h", 60 * 60_000],
 ] as const;
+const SNAPSHOT_CHECKPOINT_FRESH_MS = 10_000;
 
 function returnFrom(price: number, sentPrice: number): number {
   return (price - sentPrice) / sentPrice;
@@ -93,6 +94,61 @@ export function calculateOutcome(
     mae: returnFrom(Math.min(...lowPrices), sentPrice),
     ...(doubleTouches.length === 0 ? {} : { timeTo2xMs: Math.min(...doubleTouches) }),
     candleCount: eligibleCandles.length,
+  };
+}
+
+export function calculateSnapshotOutcome(
+  sentAt: number,
+  sentPrice: number,
+  checkpointMs: number,
+  prices: readonly RealtimePrice[],
+  priceSource: "rank_1m" | "rank_5m",
+): CalculatedOutcome | null {
+  if (
+    !Number.isSafeInteger(sentAt) ||
+    !Number.isSafeInteger(checkpointMs) ||
+    checkpointMs <= 0 ||
+    !Number.isFinite(sentPrice) ||
+    sentPrice <= 0
+  ) {
+    throw new RangeError("Snapshot outcome requires valid signal time, price, and checkpoint");
+  }
+  const checkpointAt = sentAt + checkpointMs;
+  const eligible = prices
+    .filter(
+      (item) =>
+        item.capturedAt >= sentAt &&
+        item.capturedAt <= checkpointAt &&
+        Number.isFinite(item.price) &&
+        item.price > 0,
+    )
+    .sort((left, right) => left.capturedAt - right.capturedAt);
+  if (eligible.length === 0) {
+    return null;
+  }
+  const observedPrices = [sentPrice, ...eligible.map((item) => item.price)];
+  const returns: Partial<Record<(typeof PERIODS)[number][0], number>> = {};
+  for (const [field, duration] of PERIODS) {
+    if (duration > checkpointMs) continue;
+    const targetAt = sentAt + duration;
+    const observed = eligible.findLast(
+      (item) =>
+        item.capturedAt <= targetAt &&
+        targetAt - item.capturedAt <= SNAPSHOT_CHECKPOINT_FRESH_MS,
+    );
+    if (observed !== undefined) {
+      returns[field] = returnFrom(observed.price, sentPrice);
+    }
+  }
+  const firstDouble = eligible.find((item) => item.price >= sentPrice * 2);
+  return {
+    ...returns,
+    mfe: returnFrom(Math.max(...observedPrices), sentPrice),
+    mae: returnFrom(Math.min(...observedPrices), sentPrice),
+    ...(firstDouble === undefined ? {} : { timeTo2xMs: firstDouble.capturedAt - sentAt }),
+    candleCount: 0,
+    priceSource,
+    snapshotCount: eligible.length,
   };
 }
 

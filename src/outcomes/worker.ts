@@ -4,7 +4,11 @@ import type {
   PersistenceRepository,
 } from "../db/index.js";
 import type { PoolSnapshot, TrenchesToken } from "../gmgn/index.js";
-import { calculateOutcome, fixedTerminalOutcome } from "./calculator.js";
+import {
+  calculateOutcome,
+  calculateSnapshotOutcome,
+  fixedTerminalOutcome,
+} from "./calculator.js";
 import type {
   CalculatedOutcome,
   GraduationStatus,
@@ -29,6 +33,8 @@ type WorkerJob =
       readonly sentAt: number;
       readonly sentPrice: number;
       readonly poolBaseline: null;
+      readonly snapshotFallbackOnly: boolean;
+      readonly previousPoolRemoved: boolean;
     };
 
 function isPoolSnapshot(value: unknown): value is PoolSnapshot {
@@ -200,6 +206,8 @@ export class OutcomeWorker {
       sentAt: job.sampledAt,
       sentPrice: job.baselinePrice,
       poolBaseline: null,
+      snapshotFallbackOnly: job.snapshotFallbackOnly,
+      previousPoolRemoved: job.previousPoolRemoved,
     };
   }
 
@@ -211,6 +219,21 @@ export class OutcomeWorker {
       return;
     }
     try {
+      if (job.snapshotFallbackOnly) {
+        if (await this.completeSnapshotOutcome(job, job.sentPrice, attempt, now)) return;
+        if (job.previousPoolRemoved) {
+          this.complete(
+            job,
+            "pool_removed",
+            attempt,
+            fixedTerminalOutcome(job.checkpointMs, -1),
+            now,
+          );
+          return;
+        }
+        this.complete(job, "api_missing", attempt, { reason: "snapshot_backfill_missing" }, now);
+        return;
+      }
       const candles = await this.options.dataSource.fetchKlines(
         job.tokenKey,
         Math.floor(job.sentAt / 1_000),
@@ -256,6 +279,7 @@ export class OutcomeWorker {
           attempt,
           {
             ...result,
+            priceSource: "kline",
             ...(graduation === undefined ? {} : { graduation }),
             ...(poolRemoved === undefined ? {} : { poolRemoved }),
           },
@@ -263,6 +287,8 @@ export class OutcomeWorker {
         );
         return;
       }
+
+      if (await this.completeSnapshotOutcome(job, job.sentPrice, attempt, now)) return;
 
       if (job.lifecycle === "graduated") {
         const pool = await this.options.dataSource.fetchPool(job.tokenKey);
@@ -318,6 +344,69 @@ export class OutcomeWorker {
     } catch {
       this.retryOrComplete(job, attempt, "retry_exhausted", "market_api_failed", now);
     }
+  }
+
+  private snapshotOutcome(job: WorkerJob, sentPrice: number): CalculatedOutcome | null {
+    const rank1m = this.options.repository.getRankPrices(
+      job.tokenKey,
+      "rank_1m",
+      job.sentAt,
+      job.dueAt,
+    );
+    if (rank1m.length > 0) {
+      return calculateSnapshotOutcome(
+        job.sentAt,
+        sentPrice,
+        job.checkpointMs,
+        rank1m,
+        "rank_1m",
+      );
+    }
+    return calculateSnapshotOutcome(
+      job.sentAt,
+      sentPrice,
+      job.checkpointMs,
+      this.options.repository.getRankPrices(
+        job.tokenKey,
+        "rank_5m",
+        job.sentAt,
+        job.dueAt,
+      ),
+      "rank_5m",
+    );
+  }
+
+  private async completeSnapshotOutcome(
+    job: WorkerJob,
+    sentPrice: number,
+    attempt: number,
+    now: number,
+  ): Promise<boolean> {
+    const result = this.snapshotOutcome(job, sentPrice);
+    if (result === null) return false;
+    const graduation =
+      job.lifecycle === "curve" && job.checkpointMs === 60 * 60_000
+        ? curveEvidence(
+            this.options.repository.getTrenchesEvidence(job.tokenKey, job.sentAt, now),
+            job.dueAt,
+            job.tokenKey,
+          ).graduation
+        : undefined;
+    const recheckedPoolRemoval = job.previousPoolRemoved
+      ? true
+      : await this.confirmCompletedPoolRemoval(job);
+    this.complete(
+      job,
+      "completed",
+      attempt,
+      {
+        ...result,
+        ...(graduation === undefined ? {} : { graduation }),
+        ...(recheckedPoolRemoval === undefined ? {} : { poolRemoved: recheckedPoolRemoval }),
+      },
+      now,
+    );
+    return true;
   }
 
   private async confirmCompletedPoolRemoval(job: WorkerJob): Promise<boolean | undefined> {

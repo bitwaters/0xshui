@@ -64,6 +64,7 @@
 - [x] 7.7 Replace minute-named headline hit rates with fixed 1.2x/1.5x/2x/3x/5x price-touch rates over the complete one-hour observation window, including early-dead/no-trade/pool-removed samples as failures and persisting approximate time-to-2x
 - [x] 7.8 Update Telegram statistics, operations/replay summaries, tests, and documentation while retaining fixed-time returns as detail-only diagnostics and preserving existing cumulative samples
 - [x] 7.9 At the graduated T+1h checkpoint, preserve historical multiple hits while independently confirming a later Pool removal so the same signal can count as both a multiple hit and a confirmed removal
+- [x] 7.10 Use saved 1m Rank prices, then 5m Rank, when Kline is empty; conservatively calculate observed multiples, requeue affected cumulative outcomes once, and verify the fallback without adding a data source or configuration
 
 ## 8. Deterministic Replay
 

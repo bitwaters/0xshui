@@ -30,6 +30,22 @@ function serializeJson(value: unknown): string {
   return serialized;
 }
 
+function snapshotBackfillMarker(resultJson: string | null): {
+  readonly snapshotFallbackOnly: boolean;
+  readonly previousPoolRemoved: boolean;
+} {
+  if (resultJson === null) return { snapshotFallbackOnly: false, previousPoolRemoved: false };
+  const value = JSON.parse(resultJson) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { snapshotFallbackOnly: false, previousPoolRemoved: false };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    snapshotFallbackOnly: record.reason === "snapshot_backfill_pending",
+    previousPoolRemoved: record.previousPoolRemoved === true || record.previousPoolRemoved === 1,
+  };
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
@@ -534,7 +550,8 @@ export class PersistenceRepository {
         SELECT o.id AS outcomeId, o.signal_id AS signalId, s.token_key AS tokenKey,
                s.lifecycle, o.checkpoint_ms AS checkpointMs, o.due_at AS dueAt,
                o.attempt_count AS attemptCount, s.sent_at AS sentAt,
-               s.sent_price AS sentPrice, s.pool_baseline_json AS poolBaselineJson
+               s.sent_price AS sentPrice, s.pool_baseline_json AS poolBaselineJson,
+               o.result_json AS resultJson
         FROM signal_outcomes o
         JOIN signals s ON s.id = o.signal_id
         WHERE o.state = 'pending'
@@ -545,11 +562,15 @@ export class PersistenceRepository {
         LIMIT ?
       `)
       .all(now, now, limit) as Array<
-      Omit<PendingOutcomeJob, "poolBaseline"> & { poolBaselineJson: string | null }
+      Omit<
+        PendingOutcomeJob,
+        "poolBaseline" | "snapshotFallbackOnly" | "previousPoolRemoved"
+      > & { poolBaselineJson: string | null; resultJson: string | null }
     >;
-    return rows.map(({ poolBaselineJson, ...row }) => ({
+    return rows.map(({ poolBaselineJson, resultJson, ...row }) => ({
       ...row,
       poolBaseline: poolBaselineJson === null ? null : (JSON.parse(poolBaselineJson) as unknown),
+      ...snapshotBackfillMarker(resultJson),
     }));
   }
 
@@ -560,12 +581,13 @@ export class PersistenceRepository {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new RangeError("Research outcome job limit must be between 1 and 100");
     }
-    return this.database
+    const rows = this.database
       .prepare(`
         SELECT o.id AS outcomeId, o.research_sample_id AS researchSampleId,
                s.token_key AS tokenKey, s.lifecycle, o.checkpoint_ms AS checkpointMs,
                o.due_at AS dueAt, o.attempt_count AS attemptCount,
-               s.sampled_at AS sampledAt, s.baseline_price AS baselinePrice
+               s.sampled_at AS sampledAt, s.baseline_price AS baselinePrice,
+               o.result_json AS resultJson
         FROM research_outcomes o
         JOIN research_samples s ON s.id = o.research_sample_id
         WHERE o.state = 'pending'
@@ -574,7 +596,15 @@ export class PersistenceRepository {
         ORDER BY o.due_at, o.id
         LIMIT ?
       `)
-      .all(now, now, limit) as readonly PendingResearchOutcomeJob[];
+      .all(now, now, limit) as Array<
+        Omit<PendingResearchOutcomeJob, "snapshotFallbackOnly" | "previousPoolRemoved"> & {
+          resultJson: string | null;
+        }
+      >;
+    return rows.map(({ resultJson, ...row }) => ({
+      ...row,
+      ...snapshotBackfillMarker(resultJson),
+    }));
   }
 
   public savePoolBaseline(tokenKey: string, pool: unknown, now: number): boolean {
@@ -607,6 +637,85 @@ export class PersistenceRepository {
       }
     }
     return prices;
+  }
+
+  public getRankPrices(
+    tokenKey: string,
+    source: "rank_1m" | "rank_5m",
+    from: number,
+    to: number,
+  ): readonly { readonly capturedAt: number; readonly price: number }[] {
+    const rows = this.database
+      .prepare(`
+        SELECT captured_at AS capturedAt, payload_json AS payloadJson
+        FROM token_snapshots
+        WHERE token_key = ? AND source = ? AND event_type != 'exit'
+          AND captured_at >= ? AND captured_at <= ?
+        ORDER BY captured_at, ingest_seq, id
+      `)
+      .all(tokenKey, source, from, to) as Array<{ capturedAt: number; payloadJson: string }>;
+    const prices: Array<{ capturedAt: number; price: number }> = [];
+    for (const row of rows) {
+      const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+      if (typeof payload.price === "number" && Number.isFinite(payload.price) && payload.price > 0) {
+        prices.push({ capturedAt: row.capturedAt, price: payload.price });
+      }
+    }
+    return prices;
+  }
+
+  public requeueSnapshotFallbackOutcomes(now: number): {
+    readonly signals: number;
+    readonly research: number;
+  } {
+    return this.database.transaction(() => {
+      const migrationKey = "snapshot_outcome_fallback_backfill_v1";
+      if (this.getRuntimeState<boolean>(migrationKey) === true) {
+        return { signals: 0, research: 0 };
+      }
+      const signalResult = this.database
+        .prepare(`
+          UPDATE signal_outcomes AS o
+          SET state = 'pending', attempt_count = 0, next_attempt_at = due_at,
+              result_json = json_object(
+                'reason', 'snapshot_backfill_pending',
+                'previousPoolRemoved', state = 'pool_removed'
+              ),
+              completed_at = NULL, updated_at = ?
+          WHERE state IN ('no_trade', 'pool_removed', 'api_missing', 'retry_exhausted')
+            AND EXISTS (
+              SELECT 1 FROM signals s JOIN token_snapshots t ON t.token_key = s.token_key
+              WHERE s.id = o.signal_id
+                AND t.source IN ('rank_1m', 'rank_5m') AND t.event_type != 'exit'
+                AND t.captured_at >= s.sent_at AND t.captured_at <= o.due_at
+                AND json_type(t.payload_json, '$.price') IN ('integer', 'real')
+                AND json_extract(t.payload_json, '$.price') > 0
+            )
+        `)
+        .run(now);
+      const researchResult = this.database
+        .prepare(`
+          UPDATE research_outcomes AS o
+          SET state = 'pending', attempt_count = 0, next_attempt_at = due_at,
+              result_json = json_object(
+                'reason', 'snapshot_backfill_pending',
+                'previousPoolRemoved', state = 'pool_removed'
+              ),
+              completed_at = NULL, updated_at = ?
+          WHERE state IN ('no_trade', 'pool_removed', 'api_missing', 'retry_exhausted')
+            AND EXISTS (
+              SELECT 1 FROM research_samples s JOIN token_snapshots t ON t.token_key = s.token_key
+              WHERE s.id = o.research_sample_id
+                AND t.source IN ('rank_1m', 'rank_5m') AND t.event_type != 'exit'
+                AND t.captured_at >= s.sampled_at AND t.captured_at <= o.due_at
+                AND json_type(t.payload_json, '$.price') IN ('integer', 'real')
+                AND json_extract(t.payload_json, '$.price') > 0
+            )
+        `)
+        .run(now);
+      this.setRuntimeState(migrationKey, true, now);
+      return { signals: signalResult.changes, research: researchResult.changes };
+    })();
   }
 
   public getTrenchesEvidence(tokenKey: string, from: number, to: number): readonly {

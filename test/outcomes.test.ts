@@ -6,6 +6,7 @@ import type { Candle, PoolSnapshot } from "../src/gmgn/index.js";
 import {
   OutcomeWorker,
   calculateOutcome,
+  calculateSnapshotOutcome,
   type OutcomeDataSource,
   type PoolLookup,
 } from "../src/outcomes/index.js";
@@ -103,6 +104,27 @@ function outcomeRow(database: SqliteDatabase, checkpointMs = FIFTEEN): {
   };
 }
 
+function addRankPrice(
+  repository: PersistenceRepository,
+  source: "rank_1m" | "rank_5m",
+  capturedAt: number,
+  price: number,
+  eventType: "enter" | "update" | "exit" = "update",
+): void {
+  repository.appendSourceBatch(source, [
+    {
+      tokenKey: TOKEN,
+      eventType,
+      capturedAt,
+      sourceCapturedAt: capturedAt,
+      samplingLevel: "high",
+      payload: { tokenKey: TOKEN, address: TOKEN, price },
+      upstreamFilterVersion: "test",
+      adapterVersion: "test",
+    },
+  ]);
+}
+
 test("outcome calculator excludes the signal candle and any future candle", () => {
   const sentAt = 1_005_000;
   const result = calculateOutcome(
@@ -129,6 +151,29 @@ test("outcome calculator excludes the signal candle and any future candle", () =
   assert.equal(result.mae, -0.5);
   assert.equal(result.timeTo2xMs, 45_000);
   assert.equal(result.candleCount, 3);
+});
+
+test("snapshot outcome reports observed multiples without filling stale checkpoints", () => {
+  const result = calculateSnapshotOutcome(
+    NOW,
+    1,
+    FIFTEEN,
+    [
+      { capturedAt: NOW + 30_000, price: 1.1 },
+      { capturedAt: NOW + 55_000, price: 1.3 },
+      { capturedAt: NOW + 120_000, price: 2.2 },
+      { capturedAt: NOW + FIFTEEN - 40_000, price: 0.8 },
+    ],
+    "rank_1m",
+  );
+  assert.notEqual(result, null);
+  assert.ok(Math.abs((result?.return1m ?? Infinity) - 0.3) < Number.EPSILON);
+  assert.equal(result?.return15m, undefined);
+  assert.ok(Math.abs((result?.mfe ?? Infinity) - 1.2) < 1e-12);
+  assert.ok(Math.abs((result?.mae ?? Infinity) + 0.2) < 1e-12);
+  assert.equal(result?.timeTo2xMs, 120_000);
+  assert.equal(result?.priceSource, "rank_1m");
+  assert.equal(result?.snapshotCount, 4);
 });
 
 test("sent transition atomically creates both persistent checkpoint jobs", () => {
@@ -264,6 +309,126 @@ test("empty Kline needs corroboration for no_trade and pool_removed", async () =
     assert.equal(outcomeRow(unsupported.database).state, "api_missing");
   } finally {
     unsupported.database.close();
+  }
+});
+
+test("empty Kline prefers 1m Rank prices and falls back to 5m Rank", async () => {
+  const preferred = setupSent();
+  try {
+    addRankPrice(preferred.repository, "rank_5m", NOW + 30_000, 5);
+    addRankPrice(preferred.repository, "rank_1m", NOW + 40_000, 2.5);
+    addRankPrice(preferred.repository, "rank_1m", NOW + 50_000, 9, "exit");
+    const worker = new OutcomeWorker({
+      repository: preferred.repository,
+      dataSource: dataSource([]),
+      now: () => NOW + FIFTEEN,
+    });
+    await worker.runDue();
+    const row = outcomeRow(preferred.database);
+    const result = JSON.parse(row.result_json ?? "{}") as Record<string, unknown>;
+    assert.equal(row.state, "completed");
+    assert.equal(result.priceSource, "rank_1m");
+    assert.equal(result.snapshotCount, 1);
+    assert.equal(result.mfe, 1.5);
+  } finally {
+    preferred.database.close();
+  }
+
+  const fallback = setupSent();
+  try {
+    addRankPrice(fallback.repository, "rank_5m", NOW + 30_000, 3);
+    const worker = new OutcomeWorker({
+      repository: fallback.repository,
+      dataSource: dataSource([]),
+      now: () => NOW + FIFTEEN,
+    });
+    await worker.runDue();
+    const result = JSON.parse(outcomeRow(fallback.database).result_json ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    assert.equal(result.priceSource, "rank_5m");
+    assert.equal(result.mfe, 2);
+  } finally {
+    fallback.database.close();
+  }
+});
+
+test("existing terminal outcomes are requeued once and backfilled without Kline requests", async () => {
+  const { database, repository } = setupSent();
+  try {
+    addRankPrice(repository, "rank_1m", NOW + 30_000, 2);
+    database
+      .prepare(`
+        UPDATE signal_outcomes
+        SET state = CASE WHEN checkpoint_ms = ${HOUR} THEN 'pool_removed' ELSE 'no_trade' END,
+          attempt_count = 1,
+          result_json = '{"mfe":0}', completed_at = due_at
+      `)
+      .run();
+    const configVersion = repository.getConfigVersion()?.version;
+    assert.notEqual(configVersion, undefined);
+    repository.createResearchSample({
+      tokenKey: TOKEN,
+      configVersion: configVersion ?? 0,
+      sampledAt: NOW,
+      lifecycle: "graduated",
+      baselinePrice: 1,
+      feature: {},
+      detectorVersion: "test",
+      upstreamFilterVersion: "test",
+      adapterVersion: "test",
+      outcomeCheckpointsMs: [FIFTEEN, HOUR],
+    });
+    database
+      .prepare(`
+        UPDATE research_outcomes SET state = 'api_missing', attempt_count = 3,
+          result_json = '{"reason":"old"}', completed_at = due_at
+      `)
+      .run();
+
+    assert.deepEqual(repository.requeueSnapshotFallbackOutcomes(NOW + HOUR + 1), {
+      signals: 2,
+      research: 2,
+    });
+    assert.deepEqual(repository.requeueSnapshotFallbackOutcomes(NOW + HOUR + 2), {
+      signals: 0,
+      research: 0,
+    });
+    assert.deepEqual(
+      database
+        .prepare("SELECT state, attempt_count FROM signal_outcomes ORDER BY checkpoint_ms")
+        .all(),
+      [
+        { state: "pending", attempt_count: 0 },
+        { state: "pending", attempt_count: 0 },
+      ],
+    );
+    let klineCalls = 0;
+    const worker = new OutcomeWorker({
+      repository,
+      dataSource: {
+        fetchKlines: async () => {
+          klineCalls += 1;
+          throw new Error("historical backfill must not refetch Kline");
+        },
+        fetchPool: async () => {
+          throw new Error("confirmed historical removal must not require another Pool request");
+        },
+      },
+      now: () => NOW + HOUR + 3,
+    });
+    assert.equal(await worker.runDue(4), 4);
+    assert.equal(klineCalls, 0);
+    const oneHour = JSON.parse(outcomeRow(database, HOUR).result_json ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    assert.equal(outcomeRow(database, HOUR).state, "completed");
+    assert.equal(oneHour.priceSource, "rank_1m");
+    assert.equal(oneHour.poolRemoved, true);
+  } finally {
+    database.close();
   }
 });
 

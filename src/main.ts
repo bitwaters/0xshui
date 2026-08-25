@@ -123,6 +123,11 @@ async function run(): Promise<void> {
     }
     health.markHealthy("gmgn", Date.now());
 
+    const requeuedOutcomes = context.repository.requeueSnapshotFallbackOutcomes(Date.now());
+    if (requeuedOutcomes.signals > 0 || requeuedOutcomes.research > 0) {
+      context.logger.info("outcome_snapshot_backfill_requeued", requeuedOutcomes);
+    }
+
     const outcomeWorker = new OutcomeWorker({
       repository: context.repository,
       dataSource: createGmgnOutcomeDataSource(client),

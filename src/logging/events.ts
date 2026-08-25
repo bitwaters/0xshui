@@ -18,6 +18,7 @@ export const OPERATIONAL_EVENTS = [
   "signal_updated",
   "signal_suppressed",
   "outcome_collected",
+  "outcome_snapshot_backfill_requeued",
   "research_sample_created",
   "stats_generated",
   "rate_limit_paused",

@@ -79,6 +79,8 @@ export interface PendingOutcomeJob {
   readonly sentAt: number;
   readonly sentPrice: number | null;
   readonly poolBaseline: unknown | null;
+  readonly snapshotFallbackOnly: boolean;
+  readonly previousPoolRemoved: boolean;
 }
 
 export interface ResearchSampleInput {
@@ -104,6 +106,8 @@ export interface PendingResearchOutcomeJob {
   readonly attemptCount: number;
   readonly sampledAt: number;
   readonly baselinePrice: number;
+  readonly snapshotFallbackOnly: boolean;
+  readonly previousPoolRemoved: boolean;
 }
 
 export interface ResearchOutcomeRecord {

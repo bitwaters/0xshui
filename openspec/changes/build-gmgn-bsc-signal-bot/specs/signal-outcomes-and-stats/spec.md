@@ -26,6 +26,21 @@
 - **WHEN** 检查点时刻没有完全同时间戳的蜡烛
 - **THEN** 系统使用检查点之前最后一根已完成蜡烛的收盘价且不读取检查点之后的数据
 
+### Requirement: Empty-Kline snapshot fallback
+Kline 请求成功但返回空数据时，系统 SHALL 优先使用观察窗口内已保存的 `rank_1m` 非退出价格快照；仅当 `rank_1m` 没有有效价格时才使用 `rank_5m`。快照兜底 SHALL 计算实际观察到的最高/最低倍数和首次 2x 触达时间；固定时点收益只有在目标时刻前 10 秒内存在所选来源的新鲜价格时才可写入。两种 Rank 均无有效价格时 SHALL 继续执行既有 Pool/Trenches 终态证据规则。系统 SHALL 对部署前已有、具备 Rank 快照但被标记为 `no_trade`、`pool_removed`、`api_missing` 或 `retry_exhausted` 的结果执行一次性重算，不删除信号或更改配置版本。
+
+#### Scenario: Empty Kline has saved 1m Rank prices
+- **WHEN** Kline 成功返回空数据且观察窗口内存在有效 `rank_1m` 价格快照
+- **THEN** 系统以这些快照完成价格触达结果，不把该样本标记为 `no_trade`
+
+#### Scenario: Only 5m Rank prices are available
+- **WHEN** Kline 成功返回空数据、`rank_1m` 无有效价格且 `rank_5m` 存在有效价格
+- **THEN** 系统使用 `rank_5m` 作为兜底并记录实际价格来源
+
+#### Scenario: A token left the ranking before a fixed checkpoint
+- **WHEN** 所选 Rank 来源在固定检查点前 10 秒内没有价格
+- **THEN** 系统保留观察窗口内的倍数触达结果，但不使用更早的陈旧价格填充该固定时点收益
+
 ### Requirement: Terminal outcome states
 每个观察检查点 SHALL 在到期后 10 分钟内进入 `complete`、`no_trade`、`pool_removed`、`api_missing` 或 `retry_exhausted` 之一。结果查询最多重试 3 次，不得无限保持待评估。
 

@@ -18,6 +18,8 @@ export interface CalculatedOutcome {
   readonly poolRemoved?: boolean;
   readonly candleCount: number;
   readonly graduation?: GraduationStatus;
+  readonly priceSource?: "kline" | "rank_1m" | "rank_5m";
+  readonly snapshotCount?: number;
 }
 
 export type PoolLookup =
