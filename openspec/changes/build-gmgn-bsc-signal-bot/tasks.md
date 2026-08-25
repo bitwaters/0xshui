@@ -79,4 +79,4 @@
 - [x] 9.5 Replace duration-based acceptance with config-version-scoped gates for 100 valid T+1h samples, 20 samples per trigger path, 90% coverage, 30 latency samples, 10,000 GMGN requests at 99% success, and zero uncontrolled 429 or critical Schema failures
 - [x] 9.6 Make private Shadow Telegram delivery immediate under the production detector rules and make `/stats` show cumulative current-config sample progress at 30, 100, and each additional 50 valid samples
 - [x] 9.7 Persist at most five compact Security-passed preheat research samples per minute with low-priority 15m/1h outcomes, keep them separate from real signals, and include their bounded quality in deterministic replay
-- [ ] 9.8 Run full validation and review, deploy through GitHub pull and Docker Compose, and verify real private-channel delivery readiness plus request/schema/rate-limit health without a duration gate
+- [x] 9.8 Run full validation and review, deploy through GitHub pull and Docker Compose, and verify real private-channel delivery readiness plus request/schema/rate-limit health without a duration gate
