@@ -86,6 +86,13 @@ export function timestampMs(value: unknown, field: string): number {
   return milliseconds;
 }
 
+export function optionalTimestampMs(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null || value === "" || value === 0 || value === "0") {
+    return undefined;
+  }
+  return timestampMs(value, field);
+}
+
 export function optionalText(value: unknown, maximum = 256): string | undefined {
   if (typeof value !== "string") {
     return undefined;

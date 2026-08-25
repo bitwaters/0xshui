@@ -21,6 +21,7 @@ import {
   objectRecord,
   optionalAddress,
   optionalText,
+  optionalTimestampMs,
   optionalValue,
   positiveNumber,
   ratio,
@@ -188,9 +189,9 @@ export function adaptRank(payload: unknown, interval: RankInterval): readonly Ra
         false,
         false,
       );
-      const creationTimestampMs = optionalValue(
+      const creationTimestampMs = optionalTimestampMs(
         item.creation_timestamp ?? item.created_timestamp,
-        (value) => timestampMs(value, `rank[${index}].creation_timestamp`),
+        `rank[${index}].creation_timestamp`,
       );
       const name = optionalText(item.name);
       const symbol = optionalText(item.symbol, 64);
@@ -263,9 +264,9 @@ function adaptTrenchesItem(
   const smartDegenCount = optionalValue(item.smart_degen_count, (value) =>
     integer(value, `${prefix}.smart_degen_count`),
   );
-  const creationTimestampMs = optionalValue(
+  const creationTimestampMs = optionalTimestampMs(
     item.created_timestamp ?? item.creation_timestamp,
-    (value) => timestampMs(value, `${prefix}.creation_timestamp`),
+    `${prefix}.creation_timestamp`,
   );
   const name = optionalText(item.name);
   const symbol = optionalText(item.symbol, 64);
@@ -315,10 +316,33 @@ export function adaptTrenches(payload: unknown): TrenchesSnapshot {
       }
       return rawItems.slice(0, 80).map((item, index) => adaptTrenchesItem(item, stage, index));
     };
-    const stages: Record<TrenchesStage, readonly TrenchesToken[]> = {
+    const parsedStages: Record<TrenchesStage, readonly TrenchesToken[]> = {
       new_creation: parseStage("new_creation"),
       near_completion: parseStage("near_completion"),
       completed: parseStage("completed"),
+    };
+    for (const stage of ["new_creation", "near_completion", "completed"] as const) {
+      const seen = new Set<string>();
+      for (const token of parsedStages[stage]) {
+        if (seen.has(token.tokenKey)) {
+          throw new GmgnContractError(`Duplicate token ${token.tokenKey} within ${stage}`);
+        }
+        seen.add(token.tokenKey);
+      }
+    }
+
+    // GMGN can briefly return a launchpad token in adjacent lifecycle stages.
+    // Keep the most mature stage so one source batch still has one state per token.
+    const completed = new Set(parsedStages.completed.map((token) => token.tokenKey));
+    const nearCompletion = new Set(parsedStages.near_completion.map((token) => token.tokenKey));
+    const stages: Record<TrenchesStage, readonly TrenchesToken[]> = {
+      new_creation: parsedStages.new_creation.filter(
+        (token) => !nearCompletion.has(token.tokenKey) && !completed.has(token.tokenKey),
+      ),
+      near_completion: parsedStages.near_completion.filter(
+        (token) => !completed.has(token.tokenKey),
+      ),
+      completed: parsedStages.completed,
     };
     return { stages, truncatedStages };
   }, "Trenches response");

@@ -32,6 +32,16 @@ test("adapts current double-envelope Rank fields into strict BSC models", () => 
   assert.equal(token?.creationTimestampMs, 1_787_610_000_000);
 });
 
+test("treats GMGN zero sentinel as an unknown optional creation timestamp", () => {
+  const payload = fixtureData("rank-double.json") as { rank: Array<Record<string, unknown>> };
+  payload.rank[0] = { ...payload.rank[0], creation_timestamp: 0 };
+  const token = adaptRank(payload, "1m")[0];
+  assert.equal(token?.creationTimestampMs, undefined);
+
+  payload.rank[0] = { ...payload.rank[0], creation_timestamp: -1 };
+  assert.throws(() => adaptRank(payload, "1m"), /integer >= 1/);
+});
+
 test("adapts both observed Trenches stage aliases and curve cumulative fields", () => {
   const current = adaptTrenches(fixtureData("trenches-single.json"));
   assert.equal(current.stages.new_creation[0]?.curveSwapsTotal, 30);
@@ -71,12 +81,44 @@ test("truncates an oversized Trenches stage to the documented per-stage maximum"
     progress: 0.1,
   };
   const snapshot = adaptTrenches({
-    new_creation: Array.from({ length: 81 }, () => ({ ...item })),
+    new_creation: Array.from({ length: 81 }, (_, index) => ({
+      ...item,
+      address: `0x${(index + 1).toString(16).padStart(40, "0")}`,
+    })),
     near_completion: [],
     completed: [],
   });
   assert.equal(snapshot.stages.new_creation.length, 80);
   assert.deepEqual(snapshot.truncatedStages, ["new_creation"]);
+});
+
+test("keeps the most mature Trenches stage for a cross-stage overlap", () => {
+  const address = "0x1111111111111111111111111111111111111111";
+  const item = {
+    address,
+    price: 0.1,
+    holder_count: 10,
+    swaps_24h: 10,
+    net_buy_24h: 1,
+    progress: 0.5,
+  };
+  const snapshot = adaptTrenches({
+    new_creation: [{ ...item, progress: 0.2 }],
+    near_completion: [item],
+    completed: [],
+  });
+  assert.equal(snapshot.stages.new_creation.length, 0);
+  assert.equal(snapshot.stages.near_completion[0]?.tokenKey, address);
+
+  assert.throws(
+    () =>
+      adaptTrenches({
+        new_creation: [item, item],
+        near_completion: [],
+        completed: [],
+      }),
+    /Duplicate token.*within new_creation/,
+  );
 });
 
 test("adapts mixed Security types and uses dangerous values on alias conflict", () => {

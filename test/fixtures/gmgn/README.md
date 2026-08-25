@@ -8,6 +8,9 @@ addresses and names. They intentionally retain observed envelope and field types
 - Trenches, Security, Kline, and Pool used one-layer success envelopes.
 - Current Trenches returned `near_completion`; `pump` is retained as the documented
   historical alias.
+- A 2026-08-25 live verification observed Rank using `creation_timestamp=0` for an
+  unknown optional value and one token overlapping `new_creation`/`near_completion`;
+  compact synthetic contract tests preserve both compatibility cases.
 - Security returned mixed booleans, `0/1`, and decimal strings.
 - `invalid-security-single.json` records the observed HTTP-200/code-0 response for
   an invalid address; its empty critical fields must still fail closed.
