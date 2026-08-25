@@ -16,11 +16,11 @@
 - **THEN** 重试使用新的 `timestamp` 和 `client_id`
 
 ### Requirement: Maximum BSC source coverage
-系统 SHALL 每秒调度一次 BSC Trenches 三阶段单请求、1m Rank Top100 和 5m Rank Top100。Trenches SHALL 请求 `new_creation`、`near_completion`、`completed`、每阶段 `limit=80` 和 `filter_preset=safe`；两个 Rank SHALL 请求 `limit=100` 及 `not_honeypot`、`verified`、`renounced` 过滤。
+系统 SHALL 以一个 1 秒 Tick 按 `Trenches → 1m Rank → Trenches → 5m Rank` 固定轮转，每个 Tick 最多启动一个基础请求，使 Trenches 每 2 秒、两个 Rank 各每 4 秒更新。Trenches SHALL 请求 `new_creation`、`near_completion`、`completed`、每阶段 `limit=80` 和 `filter_preset=safe`；两个 Rank SHALL 请求 `limit=100` 及 `not_honeypot`、`verified`、`renounced` 过滤。
 
 #### Scenario: Poll all realtime sources
-- **WHEN** 一个调度 Tick 到达且三个来源均无在途请求
-- **THEN** 系统分别发起一个 Trenches、一个 1m Rank 和一个 5m Rank 请求
+- **WHEN** 连续四个调度 Tick 到达且三个来源均可用
+- **THEN** 系统依次发起 Trenches、1m Rank、Trenches、5m Rank，并保持每个 Tick 最多一个基础请求
 
 #### Scenario: A source is still in flight
 - **WHEN** 某来源在下一个 Tick 到达时仍有请求未完成
@@ -79,7 +79,7 @@
 - **THEN** 系统不发送正式信号
 
 ### Requirement: Rate-limit and failure control
-系统 SHALL 使用全局加权限速，基础实时轮询目标负载为 weight 5/s，本地总上限为 weight 10/s，原始请求和重试均消耗预算。单请求 SHALL 在 5 秒超时；收到 429 后 SHALL 暂停全部 GMGN 请求，优先采用有效的未来 `X-RateLimit-Reset`、其次采用有效的未来 `reset_at`，两者均缺失或非法时使用 5 分钟冷却。`cooldown_until` SHALL 持久化并在服务重启后继续生效，且冷却期间不得主动请求 GMGN。
+系统 SHALL 使用全局加权限速，固定轮转的基础实时轮询目标负载为 1 request/s、平均 weight 2/s，本地总上限为 weight 10/s，原始请求和重试均消耗预算。单请求 SHALL 在 5 秒超时；收到 429 后 SHALL 暂停全部 GMGN 请求，优先采用有效的未来 `X-RateLimit-Reset`、其次采用有效的未来 `reset_at`，两者均缺失或非法时使用 5 分钟冷却。`cooldown_until` SHALL 持久化并在服务重启后继续生效，且冷却期间不得主动请求 GMGN。
 
 #### Scenario: GMGN responds with 429
 - **WHEN** 任一 GMGN 请求收到 429

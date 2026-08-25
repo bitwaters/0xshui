@@ -5,7 +5,7 @@ BSC Meme 代币在 Bonding Curve 和 1m 热榜阶段变化极快，人工盯盘�
 ## What Changes
 
 - 新建一个仅支持 BSC 的单进程 Telegram 信号机器人，生产环境通过项目内 HTTP Client 直接访问 GMGN OpenAPI。
-- 每秒并行轮询 GMGN Trenches、1m Top100 和 5m Top100；按地址合并为可重放的新鲜快照。
+- 使用一个 1 秒 Tick 固定轮转 GMGN Trenches、1m Top100 和 5m Top100（`Trenches → 1m → Trenches → 5m`）；按地址合并为可重放的新鲜快照。
 - 使用三条简单布尔路径识别 Bonding Curve 加速、1m 极速突破和跨来源启动，不构建综合热门评分。
 - 仅对接近触发的候选调用 GMGN Token Security，并以 Honeypot、合约权限、税率、持仓集中度、Dev、Bundler、Insider、LP 等硬条件决定是否放行。
 - 发送简洁的 Telegram 首次信号卡片；双榜持续增强时编辑原消息，配合单币、Creator 和全局限频控制噪音。

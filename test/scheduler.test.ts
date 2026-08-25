@@ -18,7 +18,32 @@ async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-test("scheduler skips only an overlapping source and continues the other sources", async () => {
+test("scheduler uses one configured tick and a fixed rate-safe source rotation", async () => {
+  const calls = { trenches: 0, rank_1m: 0, rank_5m: 0 };
+  const poller = (source: keyof typeof calls): SourcePoller => ({
+    poll: async () => {
+      calls[source] += 1;
+      return { value: source, sourceCapturedAt: calls[source] };
+    },
+    onSuccess: () => undefined,
+  });
+  const scheduler = new RealtimeScheduler({
+    intervalMs: 1_000,
+    sources: {
+      trenches: poller("trenches"),
+      rank_1m: poller("rank_1m"),
+      rank_5m: poller("rank_5m"),
+    },
+  });
+
+  for (let index = 0; index < 8; index += 1) {
+    await scheduler.tick();
+    await scheduler.waitForIdle();
+  }
+  assert.deepEqual(calls, { trenches: 4, rank_1m: 2, rank_5m: 2 });
+});
+
+test("scheduler skips only an overlapping source on its scheduled tick", async () => {
   const slow = deferred<{ value: string; sourceCapturedAt: number }>();
   const calls = { trenches: 0, rank_1m: 0, rank_5m: 0 };
   const overlaps: string[] = [];
@@ -42,12 +67,12 @@ test("scheduler skips only an overlapping source and continues the other sources
     },
   });
 
-  await scheduler.tick();
-  await flush();
-  await scheduler.tick();
-  await flush();
-  assert.deepEqual(calls, { trenches: 1, rank_1m: 2, rank_5m: 2 });
-  assert.deepEqual(overlaps, ["trenches"]);
+  for (let index = 0; index < 6; index += 1) {
+    await scheduler.tick();
+    await flush();
+  }
+  assert.deepEqual(calls, { trenches: 1, rank_1m: 2, rank_5m: 1 });
+  assert.deepEqual(overlaps, ["trenches", "trenches"]);
 
   slow.resolve({ value: "trenches", sourceCapturedAt: 1 });
   await scheduler.waitForIdle();
@@ -78,8 +103,10 @@ test("one source failure does not prevent successful peers", async () => {
       rank_5m: source("rank_5m"),
     },
   });
-  await scheduler.tick();
+  for (let index = 0; index < 4; index += 1) {
+    await scheduler.tick();
+  }
   await scheduler.waitForIdle();
   assert.deepEqual(successes.sort(), ["rank_1m", "rank_5m"]);
-  assert.deepEqual(failures, ["trenches"]);
+  assert.deepEqual(failures, ["trenches", "trenches"]);
 });

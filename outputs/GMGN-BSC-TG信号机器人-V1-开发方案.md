@@ -46,7 +46,7 @@ V1 只负责发现、筛选、推送、结果统计和历史回算，不接入�
 ```text
                   GMGN OpenAPI（直接 HTTP）
                                 │
-                    统一调度器（目标每秒发起）
+                 统一调度器（每秒一个基础请求）
                                 │
                  ┌──────────────┼──────────────┐
                  ↓              ↓              ↓
@@ -273,24 +273,22 @@ Kline：time 为毫秒，OHLC/volume 为字符串
 
 ### 5.1 统一轮询
 
-统一调度器目标每秒检查并发起以下三个请求：
+统一调度器仍只配置一个 `poll_interval: 1s`，按固定四拍轮转：
 
 ```text
-Trenches
-1m Rank
-5m Rank
+Trenches → 1m Rank → Trenches → 5m Rank → 重复
 ```
 
-每个来源各自只有一个在途请求。某个来源上一轮未结束时只跳过该来源本 Tick，不阻塞其他来源；例如 Trenches 较慢时，1m Rank 仍可继续更新。仍然只有一个调度器和一份配置，不增加部署复杂度。
+每个 Tick 最多发起一个基础请求，因此 Trenches 每 2 秒更新，1m/5m Rank 各每 4 秒更新。每个来源各自只有一个在途请求；上一轮未结束时只跳过该来源排定的 Tick。仍然只有一个调度器和一份配置，不增加三个独立周期。
 
 ### 5.2 权重预算
 
 ```text
-Trenches       weight 3
-1m Rank        weight 1
-5m Rank        weight 1
-------------------------
-基础负载        weight 5/秒
+Trenches       weight 3 / 2秒
+1m Rank        weight 1 / 4秒
+5m Rank        weight 1 / 4秒
+-----------------------------
+基础平均负载    1 request/秒，weight 2/秒
 ```
 
 本地统一限速设置为：
@@ -299,7 +297,7 @@ Trenches       weight 3
 10 weight/秒
 ```
 
-剩余容量用于 Token Security 和低频结果采集。Security 最大并发建议为 3，正常持续速率不超过 5 次/秒。
+剩余容量用于 Token Security 和低频结果采集。Security 最大并发为 3，但所有请求仍受同一限速器和 429 全局冷却控制。
 
 ### 5.3 HTTP Client 约束
 
@@ -764,7 +762,8 @@ GMGN 没有公开市场榜单更新 SLA，因此 V1 只对第二段设置验收�
 
 | 环节 | 预计耗时 |
 |---|---:|
-| 1 秒轮询等待 | 0～1 秒，平均约 0.5 秒 |
+| Trenches 轮询等待 | 0～2 秒，平均约 1 秒 |
+| 1m/5m Rank 轮询等待 | 0～4 秒，平均约 2 秒 |
 | 合并与规则计算 | 通常低于 50 毫秒 |
 | Security 已预热 | 0～0.2 秒 |
 | Security 未预热 | 暂按约 1～4 秒预算 |
@@ -779,8 +778,8 @@ GMGN 没有公开市场榜单更新 SLA，因此 V1 只对第二段设置验收�
 
 | 信号方式 | 预计首次推送 |
 |---|---:|
-| 1m 极速突破 | 约 3～10 秒 |
-| 跨来源启动 | 约 3～11 秒 |
+| 1m 极速突破 | 约 4～12 秒 |
+| 跨来源启动 | 约 4～14 秒 |
 | Bonding Curve 加速 | 约 4～20 秒 |
 | 双榜确认 | 首次信号后约 5～30 秒 |
 
@@ -1594,6 +1593,7 @@ config_version
 - [GMGN Token 官方能力说明](https://github.com/GMGNAI/gmgn-skills/blob/main/skills/gmgn-token/SKILL.md)
 - [GMGN 官方 OpenApiClient 与鉴权实现](https://github.com/GMGNAI/gmgn-skills/blob/main/src/client/OpenApiClient.ts)
 - [GMGN CLI 官方 npm 包（仅作开发诊断）](https://www.npmjs.com/package/gmgn-cli)
+- [GMGN 官方数据抓取白名单说明（公开参考上限 2 requests/s）](https://docs.gmgn.ai/index/cooperation-api-data-crawling-ip-whitelist)
 - [Telegram Bot API：InlineKeyboardButton / CopyTextButton](https://core.telegram.org/bots/api#inlinekeyboardbutton)
 - [BNB Chain：Four.meme Bonding Curve 与 PancakeSwap 迁移说明](https://www.bnbchain.org/en/blog/how-to-launch-a-memecoin-on-bnb-chain-a-step-by-step-guide)
 - [USENIX Security：BSC Token Spammer、Rug Pull 与 Sniper Bot 研究](https://www.usenix.org/system/files/usenixsecurity23-cernera.pdf)

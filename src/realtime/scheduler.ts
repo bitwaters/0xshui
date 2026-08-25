@@ -17,12 +17,18 @@ export interface SchedulerOptions {
   readonly sources: Readonly<Record<RealtimeSource, SourcePoller>>;
 }
 
-const SOURCE_ORDER: readonly RealtimeSource[] = ["trenches", "rank_1m", "rank_5m"];
+const SOURCE_SCHEDULE: readonly (readonly RealtimeSource[])[] = [
+  ["trenches"],
+  ["rank_1m"],
+  ["trenches"],
+  ["rank_5m"],
+];
 
 export class RealtimeScheduler {
   private readonly inFlight = new Map<RealtimeSource, Promise<void>>();
   private timer: NodeJS.Timeout | undefined;
   private stopped = true;
+  private tickIndex = 0;
 
   public constructor(private readonly options: SchedulerOptions) {
     if (!Number.isSafeInteger(options.intervalMs) || options.intervalMs <= 0) {
@@ -53,7 +59,9 @@ export class RealtimeScheduler {
   }
 
   public async tick(): Promise<void> {
-    for (const source of SOURCE_ORDER) {
+    const sources = SOURCE_SCHEDULE[this.tickIndex % SOURCE_SCHEDULE.length] ?? [];
+    this.tickIndex += 1;
+    for (const source of sources) {
       if (this.inFlight.has(source)) {
         this.options.sources[source].onOverlap?.(source);
         continue;
