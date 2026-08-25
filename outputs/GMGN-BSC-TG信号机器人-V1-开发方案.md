@@ -299,10 +299,13 @@ Trenches       weight 3 / 2秒
 
 剩余容量用于 Token Security 和低频结果采集。Security 最大并发为 3，但所有请求仍受同一限速器和 429 全局冷却控制。
 
+限速器内部只保留一个有界优先 FIFO 队列，优先级固定为：实时榜单 > Security > 离线 Kline/Pool；同一优先级严格按进入顺序执行，较轻请求不能绕过较早的 Trenches 重请求。排队超过 10 秒直接失败并释放来源在途标记，由后续轮询重试，禁止无限等待。
+
 ### 5.3 HTTP Client 约束
 
 - 全进程只创建一个 `GmgnHttpClient`，复用 Node/Undici 连接池，不为每次请求创建进程或新客户端。
 - 单请求硬超时 5 秒；超时后释放该来源在途标记，由下一轮调度恢复。
+- HTTP 5 秒超时从真正发起网络请求开始计算；其前面的本地限流排队另有 10 秒硬上限，因此两者不能形成无限在途请求。
 - 网络错误或 5xx 最多快速重试 1 次，使用 200～500ms 抖动；重试时生成新的 `timestamp/client_id`。
 - 429 不进入普通重试，统一交给全局冷却逻辑。
 - 只接受 JSON；单响应体上限 10MB，超限按 Schema 错误处理。
@@ -646,10 +649,11 @@ is_wash_trading 变为 true
 曲线币额外取消：
 
 ```text
-bonding_progress 停止增长
-AND holder_count 也停止增长
-AND curve_net_buy_total 没有增加
+bonding_progress / holder_count / curve_swaps_total / curve_net_buy_total
+任一可比较的累计值相对候选基线实际下降
 ```
+
+累计值与候选基线完全相同属于中性状态，常见于 Security 返回后尚未来得及产生下一轮 Trenches 更新，不能据此取消。最终复检沿用候选的原始触发类型，但只检查当前来源存在性、Security、流动性、排名回落、买压和取消规则，不要求 10 秒加速事件再次发生。
 
 被取消的候选仍写入内部日志，供后续回算判断取消规则是否过严。
 
@@ -1468,13 +1472,15 @@ V1 不要求建设 Dashboard，结构化日志和 `/stats detail` 足够。后�
 - 记录告警日志。
 - 不主动推送“接口异常”到用户信号频道。
 
+若 Trenches、1m Rank、5m Rank 任一必需来源从启动或最后一次成功响应起连续 30 秒未成功，进程记录具体陈旧来源并通过现有优雅关闭流程以失败状态退出，由 Docker Compose 自动重启。成功但榜单内容没有变化的响应仍刷新活性时间；安静市场不会触发重启。
+
 ### 23.3 Telegram 失败
 
 - 调用 Telegram 前通过 SQLite 原子条件更新写入 `delivery_pending`，同一合约只有一个执行者可以进入发送。
 - 只有能确认消息未被 Telegram 接受的错误才最多尝试 3 次并使用指数退避，例如连接建立前失败或明确的 429。
 - 请求发出后的超时、连接中断或接受状态不明的 5xx 不能证明消息未发送，标记为 `delivery_unknown`，不自动重试，也不允许该代币再次首次发送。
 - 服务启动恢复到没有 `telegram_message_id` 的 `delivery_pending` 时，同样转为 `delivery_unknown`，不自动重试。
-- 安全重试期间重新检查价格和排名；若排名已经严重回落，取消发送并记录 `telegram_delay_cancelled`。
+- 安全重试期间重新检查当前来源、Security、流动性、买压和排名回落；若当前条件失败则取消并记录 `telegram_delay_cancelled`，但不要求最初的短时动量触发再次出现。
 - Telegram Bot API 没有客户端 exactly-once 键。该策略选择极少量漏发风险，避免在模糊结果下主动制造重复消息，不引入消息队列或复杂回查机制。
 
 ### 23.4 SQLite 异常

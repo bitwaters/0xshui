@@ -494,12 +494,15 @@ function cancellationReason(input: DetectorInput, reference: CandidateReference)
   if (reference.lifecycle === "curve") {
     if (
       trench !== undefined &&
-      reference.bondingProgress !== undefined &&
-      reference.curveHolderCount !== undefined &&
-      reference.curveNetBuyTotal !== undefined &&
-      (trench.bondingProgress ?? -Infinity) <= reference.bondingProgress &&
-      (trench.holderCount ?? -Infinity) <= reference.curveHolderCount &&
-      (trench.curveNetBuyTotal ?? -Infinity) <= reference.curveNetBuyTotal
+      [
+        [trench.bondingProgress, reference.bondingProgress],
+        [trench.holderCount, reference.curveHolderCount],
+        [trench.curveSwapsTotal, reference.curveSwapsTotal],
+        [trench.curveNetBuyTotal, reference.curveNetBuyTotal],
+      ].some(
+        ([current, baseline]) =>
+          current !== undefined && baseline !== undefined && current < baseline,
+      )
     ) {
       return "curve_momentum_stopped";
     }
@@ -598,7 +601,8 @@ export function evaluateDetector(input: DetectorInput): DetectorDecision {
 
   const freshTrigger = detectTrigger(input);
   const trigger = freshTrigger ??
-    (input.state === "security_pending" && input.candidate !== undefined
+    ((input.state === "security_pending" || input.state === "qualified") &&
+    input.candidate !== undefined
       ? evidence(input, input.candidate.trigger, input.candidate.priority)
       : null);
   const preheatSecurity = shouldPreheatSecurity(input);

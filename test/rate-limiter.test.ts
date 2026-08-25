@@ -106,3 +106,104 @@ test("client retries consume limiter weight and 429 cooldown is persisted", asyn
     database.close();
   }
 });
+
+test("priority queue serves realtime before an older offline request", async () => {
+  const database = openDatabase({ path: ":memory:" });
+  try {
+    let now = NOW;
+    const sleepers: Array<() => void> = [];
+    const limiter = new WeightedRateLimiter({
+      ratePerSecond: 1,
+      capacity: 1,
+      repository: new PersistenceRepository(database),
+      now: () => now,
+      sleep: (milliseconds) =>
+        new Promise<void>((resolve) => {
+          sleepers.push(() => {
+            now += milliseconds;
+            resolve();
+          });
+        }),
+    });
+    await limiter.acquire(1, "realtime");
+    const order: string[] = [];
+    const offline = limiter.acquire(1, "offline").then(() => order.push("offline"));
+    await Promise.resolve();
+    const realtime = limiter.acquire(1, "realtime").then(() => order.push("realtime"));
+    sleepers.shift()?.();
+    await realtime;
+    assert.deepEqual(order, ["realtime"]);
+    sleepers.shift()?.();
+    await offline;
+    assert.deepEqual(order, ["realtime", "offline"]);
+    limiter.stop();
+  } finally {
+    database.close();
+  }
+});
+
+test("same-priority FIFO does not let a lighter request bypass a heavy head", async () => {
+  const database = openDatabase({ path: ":memory:" });
+  try {
+    let now = NOW;
+    const sleepers: Array<() => void> = [];
+    const limiter = new WeightedRateLimiter({
+      ratePerSecond: 3,
+      capacity: 3,
+      repository: new PersistenceRepository(database),
+      now: () => now,
+      sleep: (milliseconds) =>
+        new Promise<void>((resolve) => {
+          sleepers.push(() => {
+            now += milliseconds;
+            resolve();
+          });
+        }),
+    });
+    await limiter.acquire(3, "realtime");
+    const order: string[] = [];
+    const heavy = limiter.acquire(3, "realtime").then(() => order.push("heavy"));
+    await Promise.resolve();
+    const light = limiter.acquire(1, "realtime").then(() => order.push("light"));
+    sleepers.shift()?.();
+    await heavy;
+    assert.deepEqual(order, ["heavy"]);
+    sleepers.shift()?.();
+    await light;
+    assert.deepEqual(order, ["heavy", "light"]);
+    limiter.stop();
+  } finally {
+    database.close();
+  }
+});
+
+test("queued requests fail at the configured maximum wait", async () => {
+  const database = openDatabase({ path: ":memory:" });
+  try {
+    let now = NOW;
+    const sleepers: Array<() => void> = [];
+    const limiter = new WeightedRateLimiter({
+      ratePerSecond: 1,
+      capacity: 1,
+      maximumQueueWaitMs: 500,
+      repository: new PersistenceRepository(database),
+      now: () => now,
+      sleep: (milliseconds) =>
+        new Promise<void>((resolve) => {
+          sleepers.push(() => {
+            now += milliseconds;
+            resolve();
+          });
+        }),
+    });
+    await limiter.acquire(1, "realtime");
+    const queued = limiter.acquire(1, "offline");
+    await Promise.resolve();
+    sleepers.shift()?.();
+    await assert.rejects(queued, /queue timeout after 500ms/);
+    assert.equal(limiter.getQueueSize(), 0);
+    limiter.stop();
+  } finally {
+    database.close();
+  }
+});

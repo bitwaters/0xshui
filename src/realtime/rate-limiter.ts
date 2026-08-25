@@ -10,6 +10,7 @@ export interface RateLimiterOptions {
   readonly repository: PersistenceRepository;
   readonly now?: () => number;
   readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly maximumQueueWaitMs?: number;
 }
 
 const PATH_POLICY: Readonly<Record<string, { weight: number; priority: RequestPriority }>> = {
@@ -24,6 +25,21 @@ async function defaultSleep(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
+const PRIORITY_ORDER: Readonly<Record<RequestPriority, number>> = {
+  realtime: 0,
+  security: 1,
+  offline: 2,
+};
+
+interface PendingRequest {
+  readonly weight: number;
+  readonly priority: RequestPriority;
+  readonly sequence: number;
+  readonly deadline: number;
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
+}
+
 export class WeightedRateLimiter {
   private tokens: number;
   private lastRefillAt: number;
@@ -31,8 +47,12 @@ export class WeightedRateLimiter {
   private recoveryStartedAt: number | null;
   private readonly now: () => number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly maximumQueueWaitMs: number;
   private readonly stopPromise: Promise<void>;
   private readonly resolveStop: () => void;
+  private readonly queue: PendingRequest[] = [];
+  private nextSequence = 0;
+  private pumping = false;
   private stopped = false;
 
   public constructor(private readonly options: RateLimiterOptions) {
@@ -46,6 +66,10 @@ export class WeightedRateLimiter {
     }
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? defaultSleep;
+    this.maximumQueueWaitMs = options.maximumQueueWaitMs ?? 10_000;
+    if (!Number.isSafeInteger(this.maximumQueueWaitMs) || this.maximumQueueWaitMs <= 0) {
+      throw new RangeError("Maximum queue wait must be a positive integer");
+    }
     let resolveStop: () => void = () => undefined;
     this.stopPromise = new Promise<void>((resolve) => {
       resolveStop = resolve;
@@ -78,6 +102,7 @@ export class WeightedRateLimiter {
     this.tokens = 0;
     this.lastRefillAt = this.now();
     this.options.repository.setRuntimeState("gmgn_cooldown_until", this.cooldownUntil);
+    this.startPump();
   }
 
   public getCooldownUntil(): number | null {
@@ -88,20 +113,61 @@ export class WeightedRateLimiter {
     if (!this.stopped) {
       this.stopped = true;
       this.resolveStop();
+      this.rejectAll(new Error("Rate limiter stopped"));
     }
   }
 
-  public async acquire(weight: number, priority: RequestPriority): Promise<void> {
+  public getQueueSize(): number {
+    return this.queue.length;
+  }
+
+  public acquire(weight: number, priority: RequestPriority): Promise<void> {
     if (!Number.isFinite(weight) || weight <= 0 || weight > this.options.capacity) {
       throw new RangeError("Request weight must be positive and not exceed limiter capacity");
     }
+    if (this.stopped) {
+      return Promise.reject(new Error("Rate limiter stopped"));
+    }
+    const enqueuedAt = this.now();
+    const pending = new Promise<void>((resolve, reject) => {
+      this.queue.push({
+        weight,
+        priority,
+        sequence: this.nextSequence,
+        deadline: enqueuedAt + this.maximumQueueWaitMs,
+        resolve,
+        reject,
+      });
+      this.nextSequence += 1;
+    });
+    this.startPump();
+    return pending;
+  }
 
-    while (true) {
-      if (this.stopped) throw new Error("Rate limiter stopped");
+  private startPump(): void {
+    if (this.pumping || this.stopped || this.queue.length === 0) return;
+    this.pumping = true;
+    void this.pump()
+      .catch((error: unknown) => {
+        if (!this.stopped) {
+          this.rejectAll(error instanceof Error ? error : new Error(String(error)));
+        }
+      })
+      .finally(() => {
+        this.pumping = false;
+        if (!this.stopped && this.queue.length > 0) this.startPump();
+      });
+  }
+
+  private async pump(): Promise<void> {
+    while (!this.stopped && this.queue.length > 0) {
       const now = this.now();
+      this.rejectExpired(now);
+      if (this.queue.length === 0) return;
+
       if (this.cooldownUntil !== null) {
         if (now < this.cooldownUntil) {
-          await this.wait(this.cooldownUntil - now);
+          await this.waitUntilChange(Math.min(this.cooldownUntil - now, this.timeToDeadline(now)));
           continue;
         }
         this.recoveryStartedAt = this.cooldownUntil;
@@ -109,20 +175,64 @@ export class WeightedRateLimiter {
         this.options.repository.setRuntimeState("gmgn_cooldown_until", null, now);
       }
 
-      const stageDelay = this.recoveryDelay(priority, now);
+      const request = this.nextRequest();
+      if (request === undefined) return;
+      const stageDelay = this.recoveryDelay(request.priority, now);
       if (stageDelay > 0) {
-        await this.wait(stageDelay);
+        await this.waitUntilChange(Math.min(stageDelay, this.timeToDeadline(now)));
         continue;
       }
 
       this.refill(now);
-      if (this.tokens >= weight) {
-        this.tokens -= weight;
-        return;
+      if (this.tokens >= request.weight) {
+        this.tokens -= request.weight;
+        this.remove(request);
+        request.resolve();
+        continue;
       }
-      const missing = weight - this.tokens;
-      await this.wait(Math.max(1, Math.ceil((missing / this.options.ratePerSecond) * 1_000)));
+      const missing = request.weight - this.tokens;
+      const tokenDelay = Math.max(
+        1,
+        Math.ceil((missing / this.options.ratePerSecond) * 1_000),
+      );
+      await this.waitUntilChange(Math.min(tokenDelay, this.timeToDeadline(now)));
     }
+  }
+
+  private nextRequest(): PendingRequest | undefined {
+    return this.queue.reduce<PendingRequest | undefined>((selected, request) => {
+      if (selected === undefined) return request;
+      const priorityDifference =
+        PRIORITY_ORDER[request.priority] - PRIORITY_ORDER[selected.priority];
+      return priorityDifference < 0 ||
+        (priorityDifference === 0 && request.sequence < selected.sequence)
+        ? request
+        : selected;
+    }, undefined);
+  }
+
+  private timeToDeadline(now: number): number {
+    return Math.max(1, Math.min(...this.queue.map((request) => request.deadline - now)));
+  }
+
+  private rejectExpired(now: number): void {
+    for (const request of [...this.queue]) {
+      if (request.deadline <= now) {
+        this.remove(request);
+        request.reject(
+          new Error(`GMGN rate-limit queue timeout after ${this.maximumQueueWaitMs}ms`),
+        );
+      }
+    }
+  }
+
+  private rejectAll(error: Error): void {
+    for (const request of this.queue.splice(0)) request.reject(error);
+  }
+
+  private remove(request: PendingRequest): void {
+    const index = this.queue.indexOf(request);
+    if (index >= 0) this.queue.splice(index, 1);
   }
 
   private recoveryDelay(priority: RequestPriority, now: number): number {
@@ -149,7 +259,7 @@ export class WeightedRateLimiter {
     this.lastRefillAt = now;
   }
 
-  private async wait(milliseconds: number): Promise<void> {
+  private async waitUntilChange(milliseconds: number): Promise<void> {
     await Promise.race([this.sleep(milliseconds), this.stopPromise]);
     if (this.stopped) throw new Error("Rate limiter stopped");
   }

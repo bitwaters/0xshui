@@ -24,6 +24,7 @@ import {
   RealtimeScheduler,
   SecurityManager,
   SnapshotCoordinator,
+  SourceLivenessWatchdog,
   TokenWindowStore,
   WeightedRateLimiter,
   type RealtimeSource,
@@ -37,6 +38,8 @@ dotenv.config({ quiet: true });
 const OUTCOME_TICK_MS = 30_000;
 const OPERATIONS_TICK_MS = 60_000;
 const MAINTENANCE_TICK_MS = 24 * 60 * 60_000;
+const SOURCE_LIVENESS_TIMEOUT_MS = 30_000;
+const SOURCE_LIVENESS_CHECK_MS = 5_000;
 
 function reportStartupFailure(error: unknown): void {
   if (error instanceof ConfigLoadError || error instanceof CredentialError) {
@@ -232,6 +235,27 @@ async function run(): Promise<void> {
       })),
     });
     const successfulSources = new Set<RealtimeSource>();
+    const sourceWatchdog = new SourceLivenessWatchdog({
+      startedAt: Date.now(),
+      timeoutMs: SOURCE_LIVENESS_TIMEOUT_MS,
+    });
+    let shutdownReason = "signal";
+    let shutdownRequested = false;
+    let resolveShutdown: () => void = () => undefined;
+    const shutdownPromise = new Promise<void>((resolve) => {
+      resolveShutdown = resolve;
+    });
+    const requestShutdown = (reason: string, exitCode = 0): void => {
+      if (shutdownRequested) return;
+      shutdownRequested = true;
+      shutdownReason = reason;
+      if (exitCode !== 0) process.exitCode = exitCode;
+      resolveShutdown();
+    };
+    const onSigint = (): void => requestShutdown("sigint");
+    const onSigterm = (): void => requestShutdown("sigterm");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
     scheduler = new RealtimeScheduler({
       intervalMs: context.config.poll_interval,
       sources: createMarketPollers({
@@ -239,6 +263,7 @@ async function run(): Promise<void> {
         coordinator,
         rankLimit: context.config.rank.limit,
         onSuccess: (source, capturedAt) => {
+          sourceWatchdog.markSuccess(source, capturedAt);
           health.markHealthy("storage", capturedAt);
           successfulSources.add(source);
           if (
@@ -295,6 +320,22 @@ async function run(): Promise<void> {
 
     timers.push(
       setInterval(() => {
+        const now = Date.now();
+        const staleSources = sourceWatchdog.staleSources(now);
+        if (staleSources.length === 0) return;
+        health.markFailed("gmgn", now);
+        context.logger.error(
+          "startup_failed",
+          new Error("Required GMGN source exceeded liveness timeout"),
+          {
+            component: "source_watchdog",
+            stale_sources: staleSources,
+            timeout_ms: SOURCE_LIVENESS_TIMEOUT_MS,
+          },
+        );
+        requestShutdown("gmgn_source_stale", 1);
+      }, SOURCE_LIVENESS_CHECK_MS),
+      setInterval(() => {
         void outcomeWorker.runDue().catch((error) => {
           context.logger.error("schema_contract_failed", error, { component: "outcomes" });
         });
@@ -307,6 +348,7 @@ async function run(): Promise<void> {
           health: health.snapshot(now),
           metrics: metrics.collect(0, now + 1, context.configVersion),
           gmgn_requests: requestSnapshot,
+          gmgn_limiter_queue_length: activeLimiter.getQueueSize(),
           security_queue_length: securityManager.getQueueSize(),
           security_active: securityManager.getActiveCount(),
           research_outcome_queue_length: context.repository.countPendingResearchOutcomes(),
@@ -346,10 +388,9 @@ async function run(): Promise<void> {
       clock_drift_ms: selfCheck.clockDriftMs,
       health: health.snapshot(Date.now()),
     });
-    await new Promise<void>((resolve) => {
-      process.once("SIGINT", resolve);
-      process.once("SIGTERM", resolve);
-    });
+    await shutdownPromise;
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
     for (const timer of timers) clearInterval(timer);
     bot?.stop();
     bot = undefined;
@@ -358,7 +399,7 @@ async function run(): Promise<void> {
     persistRequestMetrics(Date.now());
     health.stop();
     context.logger.info("app_stopped", {
-      reason: "signal",
+      reason: shutdownReason,
       acceptance: context.config.mode === "shadow" ? acceptance.report(Date.now()) : undefined,
     });
   } catch (error) {

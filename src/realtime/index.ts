@@ -9,6 +9,10 @@ export {
 } from "./scheduler.js";
 export { SecurityManager, type SecurityManagerOptions } from "./security-manager.js";
 export {
+  SourceLivenessWatchdog,
+  type SourceLivenessWatchdogOptions,
+} from "./source-liveness.js";
+export {
   SnapshotCoordinator,
   TokenWindowStore,
   type SnapshotCoordinatorOptions,

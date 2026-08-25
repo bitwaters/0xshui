@@ -10,6 +10,9 @@ A BSC-only Telegram signal bot that uses GMGN OpenAPI for market discovery and s
 - Mature Momentum is research-only by default. It requires age of at least one hour, liquidity of at least $30,000, 1m Top20, 5m Top40, buy pressure, and either a three-place 60-second improvement or sustained Top10 strength. `/stats detail` shows progress toward 30 valid T+1h Mature samples.
 - Delivery fails closed without fresh positive liquidity. Graduated tokens use Pool Info; curve tokens use fresh Trenches liquidity. Liquidity below $5,000 is labeled as a high-risk observation.
 - Confirmation means sustained fresh 1m/5m strength without a fallback greater than five 1m places; it no longer requires an additional fixed rank jump.
+- GMGN calls share one bounded priority FIFO: realtime market polling, then Security, then offline outcomes. A request waiting more than 10 seconds fails and releases its scheduler cycle instead of remaining in-flight forever.
+- The three required market sources have a 30-second liveness watchdog. Any stale source triggers the normal graceful shutdown path with a failure status so Docker Compose can restart the process.
+- Final Telegram recheck validates current source presence, safety, buy pressure, fallback, and liquidity without requiring the original short trigger to fire again. Equal cumulative Curve evidence is neutral; an actual regression still cancels.
 
 ## Requirements
 
@@ -95,6 +98,8 @@ Acceptance is sample-based, not time-based. The current configuration needs at l
 Security-passed preheat candidates are also stored as a compact research cohort, capped at five per rolling minute. Their 15m/1h outcomes support later parameter replay but never count as Telegram signals or acceptance samples. If the SQLite soft limit is reached after ordinary snapshots are pruned, the oldest auxiliary research samples are removed before any real signal result.
 
 Detailed statistics separate ordinary Early signals, high-risk observations, and Mature research. They also show time since the latest signal, recent candidate-state counts, and current-hour source failures. Signal quality remains sample-based; a quiet market never causes thresholds to loosen automatically.
+
+Operational logs also expose `gmgn_limiter_queue_length`. Repeated `gmgn_source_stale` shutdown reasons indicate an upstream or request-pipeline outage, not a quiet market.
 
 ## Docker Compose deployment
 

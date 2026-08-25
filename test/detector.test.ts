@@ -490,7 +490,70 @@ test("post-Security rank and curve fallback rules cancel at exact boundaries", (
       security: { capturedAt: NOW, value: security() },
     }),
   );
-  assert.equal(curveDecision.reason, "curve_momentum_stopped");
+  assert.equal(curveDecision.action, "qualified", "equal cumulative evidence is neutral");
+
+  const regressedCurve = evaluateDetector(
+    input({
+      state: "qualified",
+      candidate: curveReference,
+      market: {
+        trenches: [observation(NOW, trench({ bondingProgress: 0.19 }))],
+        rank1m: [],
+        rank5m: [],
+        sourceFresh: { trenches: true, rank_1m: false, rank_5m: false },
+      },
+      security: { capturedAt: NOW, value: security() },
+    }),
+  );
+  assert.equal(regressedCurve.action, "cancelled");
+  assert.equal(regressedCurve.reason, "curve_momentum_stopped");
+});
+
+test("qualified continuation rechecks current rules without replaying its original trigger", () => {
+  const candidate: CandidateReference = {
+    trigger: "fast_rank",
+    lifecycle: "graduated",
+    priority: "normal",
+    qualifiedAt: NOW - 20_000,
+    rank1m: 10,
+    rank1Swaps: 100,
+    rank1HolderCount: 100,
+    securityPassedAt: NOW - 5_000,
+  };
+  const current = rank({ rank: 10, swaps: 101, holderCount: 101 });
+  const market = {
+    trenches: [],
+    rank1m: [observation(NOW, current)],
+    rank5m: [],
+    current: { rank1m: current },
+    currentCapturedAt: { rank_1m: NOW },
+    sourceFresh: { trenches: false, rank_1m: true, rank_5m: false },
+  } as const;
+  const continued = evaluateDetector(
+    input({
+      state: "qualified",
+      candidate,
+      market,
+      security: { capturedAt: NOW, value: security() },
+    }),
+  );
+  assert.equal(detectTrigger(input({ market })), null);
+  assert.equal(continued.action, "qualified");
+
+  const cancelled = evaluateDetector(
+    input({
+      state: "qualified",
+      candidate,
+      market: {
+        ...market,
+        rank1m: [observation(NOW, { ...current, buys: 20, sells: 80 })],
+        current: { rank1m: { ...current, buys: 20, sells: 80 } },
+      },
+      security: { capturedAt: NOW, value: security() },
+    }),
+  );
+  assert.equal(cancelled.action, "cancelled");
+  assert.equal(cancelled.reason, "buy_pressure_lost");
 });
 
 test("move classes have non-overlapping exact boundaries", () => {

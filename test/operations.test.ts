@@ -200,6 +200,89 @@ test("runtime engine reaches sent and confirms by editing the original message",
   }
 });
 
+test("runtime delivery recheck continues a qualified candidate after its trigger window", async () => {
+  const database = openDatabase({ path: ":memory:" });
+  try {
+    const repository = new PersistenceRepository(database);
+    const config = loadAppConfig();
+    const configVersion = repository.registerConfigVersion(config, NOW);
+    const windowStore = new TokenWindowStore();
+    const baseline = rank(25, NOW - 5_000);
+    const triggered = rank(8, NOW);
+    for (const [sequence, item] of [baseline, triggered].entries()) {
+      windowStore.add(TOKEN, {
+        ingestSeq: sequence + 1,
+        source: "rank_1m",
+        eventType: "update",
+        capturedAt: item.capturedAt,
+        data: item.token,
+      });
+    }
+    windowStore.add(TOKEN, {
+      ingestSeq: 3,
+      source: "trenches",
+      eventType: "enter",
+      capturedAt: NOW,
+      data: trench(),
+    });
+    windowStore.markSourceSuccess("rank_1m", NOW);
+    windowStore.markSourceSuccess("trenches", NOW);
+
+    let now = NOW;
+    let cached: { capturedAt: number; snapshot: SecuritySnapshot } | null = null;
+    let sends = 0;
+    const publisher = new TelegramPublisher({
+      api: {
+        sendMessage: async () => {
+          sends += 1;
+          return { message_id: 99 };
+        },
+        editMessageText: async () => undefined,
+      },
+      repository,
+      chatId: "-1001",
+      now: () => now,
+      sleep: async () => undefined,
+    });
+    const engine = new SignalEngine({
+      config,
+      configVersion,
+      repository,
+      windowStore,
+      security: {
+        preheat: async () => cached?.snapshot ?? null,
+        getFreshForSend: async () => cached?.snapshot ?? null,
+        getCached: () => cached,
+      },
+      pool: {
+        getFreshForSend: async () => ({ snapshot: pool(), capturedAt: now }),
+      },
+      publisher,
+      logger: createLogger({ level: "fatal" }),
+      health: new HealthMonitor(true),
+      now: () => now,
+    });
+
+    await engine.processToken(TOKEN, now);
+    assert.equal(repository.getDetectionState(TOKEN)?.state, "security_pending");
+
+    now += 20_000;
+    cached = { capturedAt: now, snapshot: security() };
+    windowStore.replaceCurrentSource(
+      "rank_1m",
+      [{ tokenKey: TOKEN, data: triggered.token }],
+      now,
+    );
+    windowStore.markSourceSuccess("rank_1m", now);
+    await engine.processToken(TOKEN, now);
+
+    assert.equal(sends, 1);
+    assert.equal(repository.getDeliveryTarget(TOKEN)?.state, "sent");
+  } finally {
+    database.close();
+  }
+});
+
 test("delivery liquidity fails closed and classifies thin and curve evidence", () => {
   const common = { now: NOW, maximumAgeMs: 10_000, curveSourceFresh: true } as const;
   assert.deepEqual(
